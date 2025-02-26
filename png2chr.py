@@ -56,39 +56,29 @@ def convert_tile_index(dstInd):
     # source layout: 24*16
     # destination layout: 16*16 on the left, 8*16 on the right
 
-    # bits: dstInd = SCCCCCCCC (Side, Coordinates)
+    # bits: dstInd = SYYYYXXXX (Side, Y position, X position)
+    (side, dstY) = divmod(dstInd, 0x100)
+    (dstY, dstX) = divmod(dstY,   0x10)
 
-    if dstInd & 0x100 == 0:
-        # S=0 (background);
-        # bits: dstInd = 0YYYYXXXX
-        #    ->   srcY =      YYYY
-        #    ->   srcX =      XXXX
-        srcY = (dstInd >> 4) & 0b1111
-        srcX =  dstInd       & 0b1111
+    if side == 0:
+        # background
+        srcY = dstY
+        srcX = dstX
     else:
-        # S=1 (sprites);
-        # bits: dstInd = 10YYyXXXx
-        #    ->   srcY =      yYYx
-        #    ->   srcX =     10XXX
-        srcY = (
-              (dstInd >> 1) & 0b1000
-            | (dstInd >> 4) &  0b110
-            |  dstInd       &    0b1
-        )
-        srcX = (
-               0b10000
-            | (dstInd >> 1) & 0b111
-        )
+        # sprites (dstY <= 7);
+        # the NES requires the tiles of a sprite to be in consecutive indexes
+        srcY = (dstY << 1) | dstX & 0b1
+        srcX = 0b10000 | (dstX >> 1)
 
     return srcY * 24 + srcX
 
 def encode_tile(tile):
+    # tile = 16 bytes, less significant bitplane first;
     # generate 1 byte per call
-    for bitplane in range(2):
+    for bp in range(2):
         for y in range(0, 64, 8):
             yield sum(
-                ((tile[y+x] >> bitplane) & 1) << (7 - x)
-                for x in range(8)
+                ((tile[y+x] >> bp) & 1) << (7 - x) for x in range(8)
             )
 
 def main():

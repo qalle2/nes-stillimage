@@ -1,27 +1,4 @@
 ; Display a still image on the NES. Assembles with ASM6.
-; - no raster effects
-; - 4 colours
-; - image itself:
-;     - size: 192*128 px = 24*16 tiles
-;     - location: tiles (4,8)-(27,23) and AT blocks (2,4)-(13,11)
-; - left & center third of image:
-;     - made of BG
-;     - size: 16*16 tiles
-;     - location: tiles (4,8)-(19,23) and AT blocks (2,4)-(9,11)
-;     - BG subpalette 0
-; - right third of image:
-;     - made of 8*16-pixel sprites
-;     - size: 8*16 tiles = 8*8 sprites
-;     - location: tiles (20,8)-(27,23)
-;     - sprite subpalette 0
-;     - any BG tile
-;     - BG subpalette 1
-; - margins:
-;     - any BG tile
-;     - BG subpalette 1
-; - palettes:
-;     - BG0 = SPR0 = image colours
-;     - BG1: filled with image colour #0
 
 ; --- Constants ---------------------------------------------------------------
 
@@ -93,7 +70,7 @@ reset           ; initialise the NES
                 ; use PT0 for BG; use PT1 for sprites
                 lda #%10101000
                 sta ppu_ctrl
-                lda #%00011110 ; show background and sprites
+                lda #%00011110          ; show background and sprites
                 sta ppu_mask
 
 main_loop       jmp main_loop           ; an infinite loop
@@ -114,30 +91,21 @@ set_ppu_addr    sty ppu_addr            ; Y*$100+A -> address
 init_ram        ; generate sprite data (8*8 sprites) in RAM
                 ldx #0                  ; 0, 4, ..., 252
                 ;
-                ; Y position minus one (4*16-9 to 11*16-9)
-sprite_loop     txa                     ; %AAABBB00
+sprite_loop     ; Y position minus one (4*16-9 to 11*16-9)
+                txa                     ; %AAABBB00
                 lsr a
                 and #%01110000          ; %0AAA0000
                 clc
                 adc #4*16-9
                 sta sprite_data+0,x
                 ;
-                ; tile index (bits: %ABBCCC00 -> %0BBACCC1)
-                txa                     ; %ABBCCC00
-                asl a                   ; %BBCCC000
-                rol a                   ; %BCCC000A
-                rol a                   ; %CCC000AB
-                rol a                   ; %CC000ABB
-                and #%00000111          ; %00000ABB
-                tay
-                txa                     ; %ABBCCC00
-                lsr a                   ; %0ABBCCC0
-                and #%00001110          ; %0000CCC0
-                ora tile_index_lut,y    ; %0BBACCC1
+                ; tile index (bits: %AAAAAA00 -> %0AAAAAA1)
+                txa
+                lsr a
+                ora #%00000001
                 sta sprite_data+1,x
                 ;
-                ; attributes
-                lda #%00000000
+                lda #%00000000          ; attributes
                 sta sprite_data+2,x
                 ;
                 ; X position (20*8...27*8)
@@ -155,10 +123,6 @@ sprite_loop     txa                     ; %AAABBB00
                 bne sprite_loop
                 ;
                 rts
-
-tile_index_lut  ; a look-up table for sprite tile indexes;
-                ; bits: %00000ABB -> %0BBA0001
-                hex 01 21 41 61 11 31 51 71
 
 ; --- init_ppu_mem ------------------------------------------------------------
 
