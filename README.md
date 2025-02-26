@@ -2,31 +2,40 @@
 
 Table of contents:
 * [Introduction](#introduction)
-* [How to use](#how-to-use)
+* [png2nesdata.py](#png2nesdatapy)
+* [stillimage.asm](#stillimageasm)
 * [Technical info on the NES program](#technical-info-on-the-nes-program)
 * [Sources of images](#sources-of-images)
 
 ## Introduction
-Two programs:
-* `png2chr.py`: A Python program that converts an image (e.g. PNG) into NES graphics data. Requires the [Pillow](https://python-pillow.org) module.
-* `stillimage.asm`: An NES program that displays the converted graphics data (assembles with [ASM6](https://www.romhacking.net/utilities/674/)).
+Two programs that let you convert an image (e.g. PNG) into an NES ROM that shows the image.
 
 Examples (screenshots from FCEUX):
 
 ![shareware DOS Doom title screen](snap-doom.png)
 ![ethically sourced Lena](snap-lena.png)
 
-## How to use
-1. get an image file: 192&times;128 pixels, up to 4 colours (`#000000`, `#555555`, `#aaaaaa`, `#ffffff`); there are examples under `test-in/`
-1. write NES graphics data to `chr.bin`: `python3 png2chr.py image.png chr.bin`
-1. write output palette to `palette.asm`: e.g. `echo "hex 0f 15 26 30" > palette.asm`
-1. assemble: `asm6 stillimage.asm stillimage.nes`
-1. run `stillimage.nes` in an NES emulator
+## png2nesdata.py
+A Python program that converts an image (e.g. PNG) into NES graphics data. Requires the [Pillow](https://python-pillow.org) module.
 
-See also `test.sh` (warning: it deletes files).
+Command line arguments: *inputFile outputColour0 outputColour1 outputColour2 outputColour3*
+* *inputFile*: the image file to read:
+  * size: exactly 192&times;128 pixels (24&times;16 NES tiles)
+  * may only contain these colours (hexadecimal RRGGBB): `000000`, `555555`, `aaaaaa`, `ffffff`
+  * there are examples under `test-in/`
+* *outputColour0*&hellip;*outputColour3*: the output palette:
+  * each colour is an NES colour index in hexadecimal (`00` to `3f`).
+  * e.g. `0f 15 26 30`
+
+The program writes `prg.bin` and `chr.bin`. (They will be overwritten if they already exist.)
+
+## stillimage.asm
+An NES program that displays the graphics data from `png2nesdata.py`. Needs the files `prg.bin` and `chr.bin`. Assembles with [ASM6](https://www.romhacking.net/utilities/674/)).
+
+To assemble, run `asm6 stillimage.asm output.nes`
 
 ## Technical info on the NES program
-* PRG ROM: 16 KiB
+* PRG ROM: 16 KiB (only 2 KiB is actually used)
 * CHR ROM: 8 KiB
 * mapper: NROM (iNES mapper number 0)
 * name table mirroring: vertical
