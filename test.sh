@@ -11,6 +11,11 @@ echo "hex 0f 16 26 30" > palette.asm
 asm6 stillimage.asm test-out/lena.nes
 
 rm -f chr.bin
+python3 png2chr.py test-in/market.png chr.bin
+echo "hex 0f 17 27 30" > palette.asm
+asm6 stillimage.asm test-out/market.nes
+
+rm -f chr.bin
 python3 png2chr.py test-in/pattern.png chr.bin
 echo "hex 0f 00 00 30" > palette.asm
 asm6 stillimage.asm test-out/pattern.nes
