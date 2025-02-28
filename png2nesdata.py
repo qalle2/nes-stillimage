@@ -7,6 +7,7 @@ except ImportError:
     sys.exit("Pillow module required. See https://python-pillow.org")
 
 IMAGE_SIZES = (  # (width, height) in tiles
+    (26, 14),
     (24, 16),
     (20, 18),
     (18, 20),
@@ -94,7 +95,15 @@ def get_prg_data(outputPalette, width, height):
 
     # settings for attribute table, sprites and scrolling;
     # atRects: (width, height, leftMargin, rightMargin)
-    if (width, height) == (24, 16):
+    if (width, height) == (26, 14):
+        (atTopMargin, atBottomMargin) = (4, 4)
+        atRects = (
+            (9, 7, 2, 5),
+        )
+        sprStartX = 20 * 8
+        sprStartY =  8 * 8 - 1
+        (hScroll, vScroll) = (0, 0)
+    elif (width, height) == (24, 16):
         (atTopMargin, atBottomMargin) = (4, 3)
         atRects = (
             (8, 8, 2, 6),
@@ -176,12 +185,16 @@ def get_prg_data(outputPalette, width, height):
     # sprites (64*4 bytes)
     for y in range(8):
         for x in range(8):
-            yield from (
-                sprStartY + y * 16,   # Y position minus 1
-                (y * 8 + x) * 2 + 1,  # tile index
-                0b00000000,           # attributes
-                sprStartX + x * 8,    # X position
-            )
+            if height == 14 and y == 7:
+                # unused (hide)
+                yield from (0xff, 0xff, 0xff, 0xff)
+            else:
+                yield from (
+                    sprStartY + y * 16,   # Y position minus 1
+                    (y * 8 + x) * 2 + 1,  # tile index
+                    0b00000000,           # attributes
+                    sprStartX + x * 8,    # X position
+                )
 
     # palette (8*4 bytes)
     yield from outputPalette                             # BG0
@@ -207,7 +220,21 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
 
     (dstY, dstX) = divmod(dstInd, 16)  # max. (23, 15)
 
-    if (srcWidth, srcHeight) == (24, 16):
+    if (srcWidth, srcHeight) == (26, 14):
+        if dstY < 15 or dstY == 15 and dstX < 12:
+            # tiles (0,0)-(17,13) -> (0,0)-(15,15) (background)
+            (srcY, srcX) = divmod(dstInd, 18)
+        elif dstY < 16:
+            # unused (background)
+            (srcY, srcX) = (0, 0)
+        elif dstY < 23:
+            # tiles (18,0)-(25,13) -> (0,16)-(15,22) (sprites)
+            srcX = 16 + dstX // 2
+            srcY = (dstY - 16) * 2 + dstX % 2
+        else:
+            # unused (sprites)
+            (srcY, srcX) = (0, 0)
+    elif (srcWidth, srcHeight) == (24, 16):
         if dstY < 16:
             # tiles (0,0)-(15,15) -> (0,0)-(15,15) (background)
             (srcY, srcX) = (dstY, dstX)

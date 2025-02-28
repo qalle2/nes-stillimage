@@ -12,6 +12,7 @@ Two programs that let you convert an image (e.g. PNG) into an NES ROM that shows
 
 Examples (screenshots from FCEUX):
 
+![shareware DOS Doom title screen, 26*14 tiles](snap-doom-26x14.png)
 ![shareware DOS Doom title screen, 24*16 tiles](snap-doom-24x16.png)
 ![shareware DOS Doom title screen, 20*18 tiles](snap-doom-20x18.png)
 ![shareware DOS Doom title screen, 18*20 tiles](snap-doom-18x20.png)
@@ -24,6 +25,7 @@ A Python program that converts an image (e.g. PNG) into NES graphics data. Requi
 Command line arguments: *inputFile outputColour0 outputColour1 outputColour2 outputColour3*
 * *inputFile*: the image file to read:
   * size (width&times;height) must be one of these:
+    * 208&times;112 pixels (26&times;14 NES tiles)
     * 192&times;128 pixels (24&times;16 NES tiles)
     * 160&times;144 pixels (20&times;18 NES tiles)
     * 144&times;160 pixels (18&times;20 NES tiles)
