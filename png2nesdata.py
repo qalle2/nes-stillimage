@@ -11,6 +11,7 @@ IMAGE_SIZES = (  # (width, height) in tiles
     (20, 18),
     (18, 20),
     (16, 24),
+    (14, 26),
 )
 INPUT_PALETTE = (  # (red, green, blue)
     (0x00, 0x00, 0x00),
@@ -128,6 +129,15 @@ def get_prg_data(outputPalette, width, height):
         sprStartX = 16 * 8
         sprStartY =  3 * 8 - 1
         (hScroll, vScroll) = (0, 8)
+    elif (width, height) == (14, 26):
+        (atTopMargin, atBottomMargin) = (1, 1)
+        atRects = (
+            (3, 8, 5, 8),
+            (7, 5, 5, 4),
+        )
+        sprStartX = 15 * 8
+        sprStartY =  2 * 8 - 1
+        (hScroll, vScroll) = (8, 0)
     else:
         sys.exit("Error (should never happen).")
 
@@ -247,6 +257,22 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
         else:
             # tiles (8,0)-(15,15) -> (0,16)-(15,23) (sprites)
             srcX = 8 + dstX // 2
+            srcY = (dstY - 16) * 2 + dstX % 2
+    elif (srcWidth, srcHeight) == (14, 26):
+        if dstY < 6:
+            # tiles (0,0)-(5,15) -> (0,0)-(15,5) (background)
+            (srcY, srcX) = divmod(dstInd, 6)
+        elif dstY < 14 or dstY == 14 and dstX < 12:
+            # tiles (0,16)-(13,25) -> (0,6)-(15,14) (background)
+            (srcY, srcX) = divmod(dstInd - 16 * 6, 14)
+            srcY += 16
+        elif dstY < 16:
+            # unused (background)
+            srcX = 0
+            srcY = 0
+        else:
+            # tiles (6,0)-(13,15) -> (0,16)-(15,23) (sprites)
+            srcX = 6 + dstX // 2
             srcY = (dstY - 16) * 2 + dstX % 2
     else:
         sys.exit("Error (should never happen).")
