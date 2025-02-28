@@ -51,7 +51,7 @@ To assemble, run `asm6 stillimage.asm output.nes`
   * sprites
   * palette
   * horizontal scroll value
-  * verticall scroll value
+  * vertical scroll value
 
 ## Sources of images
 * `doom.png`: shareware version of *Doom* by id Software

@@ -6,24 +6,36 @@ try:
 except ImportError:
     sys.exit("Pillow module required. See https://python-pillow.org")
 
-IMAGE_SIZES = ((24, 16), (16, 24))  # (width, height) in tiles
-INPUT_PALETTE = ((0, 0, 0), (85, 85, 85), (170, 170, 170), (255, 255, 255))
-PRG_FILE = "prg.bin"  # to write
-CHR_FILE = "chr.bin"  # to write
+IMAGE_SIZES = (  # (width, height) in tiles
+    (24, 16),
+    (16, 24),
+)
+INPUT_PALETTE = (  # (red, green, blue)
+    (0x00, 0x00, 0x00),
+    (0x55, 0x55, 0x55),
+    (0xaa, 0xaa, 0xaa),
+    (0xff, 0xff, 0xff),
+)
+PRG_OUT_FILE = "prg.bin"
+CHR_OUT_FILE = "chr.bin"
+
+# --- get_tiles ---------------------------------------------------------------
 
 def get_colour_conv_table(image):
-    # get palette; convert from [R, G, B, ...] to [(R, G, B), ...]
+    # get palette in [R, G, B, ...] format
     imgPal = image.getpalette()
+    # convert palette into [(R, G, B), ...] format
     imgPal = [tuple(imgPal[i*3:(i+1)*3]) for i in range(len(imgPal) // 3)]
+    # get colours that are actually used, in [(R, G, B), ...] format
+    coloursUsed = [imgPal[c[1]] for c in image.getcolors()]
 
-    # look for unsupported palette entries that are actually used
-    if not set(imgPal[c[1]] for c in image.getcolors()).issubset(
-        set(INPUT_PALETTE)
-    ):
+    if not set(coloursUsed).issubset(set(INPUT_PALETTE)):
         sys.exit("Image contains unsupported colours.")
 
-    # create a tuple that converts original colour indexes into INPUT_PALETTE
-    return tuple(INPUT_PALETTE.index(c) for c in imgPal)
+    # create a dict that converts original colour indexes into INPUT_PALETTE
+    return dict(
+        (imgPal.index(c), INPUT_PALETTE.index(c)) for c in coloursUsed
+    )
 
 def get_tiles(image):
     # generate each tile as a tuple of 64 2-bit ints
@@ -52,53 +64,123 @@ def get_tiles(image):
                 for c in image.crop((x, y, x + 8, y + 8)).getdata()
             )
 
-def convert_tile_index_24x16(dstInd):
-    # get source tile index from destination index;
-    # source layout: 24*16;
-    # destination layout: BG 16*16 on the left, SPR 8*16 on the right
+# --- get_prg_data ------------------------------------------------------------
 
-    # bits: dstInd = SYYYYXXXX (Side, Y position, X position)
-    (side, dstY) = divmod(dstInd, 0x100)
-    (dstY, dstX) = divmod(dstY,   0x10)
+def get_prg_data(outputPalette, width, height):
+    # generate each byte of PRG data;
+    # outputPalette: a tuple of 4 ints;
+    # width, height: image size in tiles
 
-    if side == 0:
-        # background
-        srcY = dstY
-        srcX = dstX
+    # settings for name table, attribute table and sprites
+    if (width, height) == (24, 16):
+        (ntTopMargin, ntBottomMargin) = (8, 6)
+        ntRects = (
+            # width, height, startIndex, leftMargin, rightMargin
+            (16, 16, 0, 4, 12),
+        )
+        (atTopMargin, atBottomMargin) = (2, 2)
+        atRects = (
+            # width, height, leftMargin, rightMargin
+            (4, 4, 1, 3),
+        )
+        sprStartY = 4 * 16 - 8 - 1
+        sprStartX = 20 * 8
+    elif (width, height) == (16, 24):
+        (ntTopMargin, ntBottomMargin) = (4, 2)
+        ntRects = (
+            # width, height, startIndex, leftMargin, rightMargin
+            ( 8, 16,   0, 8, 16),
+            (16,  8, 128, 8,  8),
+        )
+        (atTopMargin, atBottomMargin) = (1, 1)
+        atRects = (
+            # width, height, leftMargin, rightMargin
+            (2, 4, 2, 4),
+            (4, 2, 2, 2),
+        )
+        sprStartY = 2 * 16 - 8 - 1
+        sprStartX = 16 * 8
     else:
-        # sprites (dstY <= 7);
-        # the NES requires the tiles of a sprite to be in consecutive indexes
-        srcY = (dstY << 1) | dstX & 0b1
-        srcX = 0b10000 | (dstX >> 1)
+        sys.exit("Error (should never happen).")
 
-    return srcY * 24 + srcX
+    # name table (32*30 bytes)
+    yield from (0x00 for i in range(ntTopMargin * 32))
+    for (w, h, si, lm, rm) in ntRects:
+        for y in range(h):
+            yield from (0x00           for x in range(lm))
+            yield from (si + y * w + x for x in range(w))
+            yield from (0x00           for x in range(rm))
+    yield from (0x00 for i in range(ntBottomMargin * 32))
 
-def convert_tile_index_16x24(dstInd):
-    # get source tile index from destination index;
-    # source layout: 16*24;
-    # destination layout:
-    #   - BG   8*16 on top left (tiles   0-127)
-    #   - BG  16* 8 on bottom   (tiles 128-255)
-    #   - SPR  8*16 on top right
+    # attribute table (8*8 bytes)
+    yield from (0x55 for i in range(atTopMargin * 8))
+    for (w, h, lm, rm) in atRects:
+        for y in range(h):
+            yield from (0x55 for i in range(lm))
+            yield from (0x00 for i in range(w))
+            yield from (0x55 for i in range(rm))
+    yield from (0x55 for i in range(atBottomMargin * 8))
 
-    dstY = dstInd >> 4      # 0-23
-    dstX = dstInd & 0b1111  # 0- 7
+    # sprites (64*4 bytes)
+    for y in range(8):
+        for x in range(8):
+            yield from (
+                sprStartY + y * 16,   # Y position minus 1
+                (y * 8 + x) * 2 + 1,  # tile index
+                0b00000000,           # attributes
+                sprStartX + x * 8,    # X position
+            )
 
-    if dstY < 8:
-        # top left (BG)
-        srcY = (dstY << 1) & 0b1110 | (dstX >> 3) & 0b1
-        srcX = dstX & 0b111
-    elif dstY < 16:
-        # bottom (BG)
-        srcY = 0b10000 | (dstY & 0b111)
-        srcX = dstX & 0b1111
+    # palette (8*4 bytes)
+    yield from outputPalette                             # BG0
+    yield from (outputPalette[0] for i in range(4))      # BG1
+    for i in range(2):
+        yield from (outputPalette[0], 0x00, 0x00, 0x00)  # BG2-BG3 (unused)
+    yield from outputPalette                             # SPR0
+    for i in range(3):
+        yield from (outputPalette[0], 0x00, 0x00, 0x00)  # SPR1-SPR3 (unused)
+
+    # horizontal & vertical scroll
+    yield from (0, 8)
+
+# --- get_chr_data ------------------------------------------------------------
+
+def convert_tile_index(dstInd, srcWidth, srcHeight):
+    # dstInd:    tile index in destination (pattern tables; 0-383)
+    # srcWidth:  source image width in tiles
+    # srcHeight: source image height in tiles
+    # return:    tile index in source image (0 to srcWidth*srcHeight-1)
+    # note: the NES requires the tiles of each sprite to be in consecutive
+    #       indexes, the first of which must be even
+
+    (dstY, dstX) = divmod(dstInd, 16)  # max. (15, 23)
+
+    if (srcWidth, srcHeight) == (24, 16):
+        if dstY < 16:
+            # tiles (0,0)-(15,15) -> (0,0)-(15,15) (background)
+            srcX = dstX
+            srcY = dstY
+        else:
+            # tiles (16,0)-(23,15) -> (0,16)-(15,23) (sprites)
+            srcX = dstX // 2 + 16
+            srcY = (dstY - 16) * 2 + dstX % 2
+    elif (srcWidth, srcHeight) == (16, 24):
+        if dstY < 8:
+            # tiles (0,0)-(7,15) -> (0,0)-(15,7) (background)
+            srcX = dstX % 8
+            srcY = dstY * 2 + dstX // 8 % 2
+        elif dstY < 16:
+            # tiles (0,16)-(15,23) -> (0,8)-(15,15) (background)
+            srcX = dstX
+            srcY = dstY + 8
+        else:
+            # tiles (8,0)-(15,15) -> (0,16)-(15,23) (sprites)
+            srcX = dstX // 2 + 8
+            srcY = (dstY - 16) * 2 + dstX % 2
     else:
-        # top right (sprites)
-        # -> 00 08 01 09 ...
-        srcY = (dstX & 0b1) | (dstY << 1) & 0b1110
-        srcX = 8 | (dstX >> 1)
+        sys.exit("Error (should never happen).")
 
-    return srcY * 16 + srcX
+    return srcY * srcWidth + srcX
 
 def encode_tile(tile):
     # tile = 16 bytes, less significant bitplane first;
@@ -109,92 +191,16 @@ def encode_tile(tile):
                 ((tile[y+x] >> bp) & 1) << (7 - x) for x in range(8)
             )
 
-def get_prg_data(width, height, outputColours):
-    # generate each byte of PRG data;
+def get_chr_data(tiles, width, height):
+    # generate encoded tiles in correct order;
+    # tiles: list of tuples of 64 2-bit ints;
     # width, height: image size in tiles
-    # outputColours: 4 bytes
+    for i in range(len(tiles)):
+        srcInd = convert_tile_index(i, width, height)
+        for byte in encode_tile(tiles[srcInd]):
+            yield byte
 
-    if (width, height) == (24 * 8, 16 * 8):
-        # NT - top margin
-        yield from (0x00 for i in range(8*32))
-        # NT - the image itself
-        for y in range(16):
-            yield from (0x00       for x in range( 4))
-            yield from (y * 16 + x for x in range(16))
-            yield from (0x00       for x in range(12))
-        # NT - bottom margin
-        yield from (0x00 for i in range(6*32))
-
-        # AT - top margin
-        for y in range(2):
-            yield from (0x55 for i in range(8))
-        # AT - the image itself
-        for y in range(4):
-            yield from (0x55,0x00,0x00,0x00,0x00,0x55,0x55,0x55)
-        # AT - bottom margin
-        for y in range(2):
-            yield from (0x55 for i in range(8))
-
-        # sprites
-        for y in range(8):
-            for x in range(8):
-                yield (4 + y) * 16 - 8 - 1  # Y position minus 1
-                yield (y * 8 + x) * 2 + 1   # tile index
-                yield 0b00000000            # attributes
-                yield (20 + x) * 8          # X position
-
-        # palette
-        for i in range(2):
-            # BG0, SPR0
-            yield from outputColours
-            # BG1-BG3, SPR1-SPR3 (only BG1 used)
-            yield from (outputColours[0] for i in range(3*4))
-
-        # horizontal & vertical scroll
-        yield from (0, 8)
-
-    else:
-        # NT
-        yield from (0x00 for i in range(4*32))
-        for y in range(16):
-            yield from (0x00      for x in range( 8))
-            yield from (y * 8 + x for x in range( 8))
-            yield from (0x00      for x in range(16))
-        for y in range(8):
-            yield from (0x00             for x in range( 8))
-            yield from (128 + y * 16 + x for x in range(16))
-            yield from (0x00             for x in range( 8))
-        yield from (0x00 for i in range(2*32))
-
-        # AT - top margin
-        for y in range(1):
-            yield from (0x55 for i in range(8))
-        # AT - the image itself
-        for y in range(4):
-            yield from (0x55,0x55,0x00,0x00,0x55,0x55,0x55,0x55)
-        for y in range(2):
-            yield from (0x55,0x55,0x00,0x00,0x00,0x00,0x55,0x55)
-        # AT - bottom margin
-        for y in range(1):
-            yield from (0x55 for i in range(8))
-
-        # sprites
-        for y in range(8):
-            for x in range(8):
-                yield (2 + y) * 16 - 8 - 1  # Y position minus 1
-                yield (y * 8 + x) * 2 + 1   # tile index
-                yield 0b00000000            # attributes
-                yield (16 + x) * 8          # X position
-
-        # palette
-        for i in range(2):
-            # BG0, SPR0
-            yield from outputColours
-            # BG1-BG3, SPR1-SPR3 (only BG1 used)
-            yield from (outputColours[0] for i in range(3*4))
-
-        # horizontal & vertical scroll
-        yield from (0, 8)
+# --- main --------------------------------------------------------------------
 
 def main():
     # parse arguments
@@ -202,10 +208,10 @@ def main():
         sys.exit("Converts an image into NES graphics data. See README.md.")
     inputFile = sys.argv[1]
     try:
-        outputColours = tuple(int(c, 16) for c in sys.argv[2:6])
+        outputPalette = tuple(int(c, 16) for c in sys.argv[2:6])
     except ValueError:
         sys.exit("Output colours must be hexadecimal integers.")
-    if min(outputColours) < 0 or max(outputColours) > 0x3f:
+    if min(outputPalette) < 0 or max(outputPalette) > 0x3f:
         sys.exit("Output colours must be 00-3f.")
     if not os.path.isfile(inputFile):
         sys.exit("Input file not found.")
@@ -219,34 +225,26 @@ def main():
     except OSError:
         sys.exit("Error reading input file.")
 
-    # encode tiles
-    chrData = bytearray()
-    for i in range(len(tiles)):
-        if (image.width, image.height) == (24 * 8, 16 * 8):
-            srcInd = convert_tile_index_24x16(i)
-        else:
-            srcInd = convert_tile_index_16x24(i)
-        for byte in encode_tile(tiles[srcInd]):
-            chrData.append(byte)
-
     # write PRG data
     try:
-        with open(PRG_FILE, "wb") as handle:
+        with open(PRG_OUT_FILE, "wb") as handle:
             handle.seek(0)
-            handle.write(bytes(
-                get_prg_data(image.width, image.height, outputColours)
-            ))
+            handle.write(bytes(get_prg_data(
+                outputPalette, image.width // 8, image.height // 8
+            )))
     except OSError:
-        sys.exit(f"Error writing {PRG_FILE}")
+        sys.exit(f"Error writing {PRG_OUT_FILE}")
 
     # write CHR data
     try:
-        with open(CHR_FILE, "wb") as handle:
+        with open(CHR_OUT_FILE, "wb") as handle:
             handle.seek(0)
-            handle.write(chrData)
+            handle.write(bytes(get_chr_data(
+                tiles, image.width // 8, image.height // 8
+            )))
     except OSError:
-        sys.exit(f"Error writing {CHR_FILE}")
+        sys.exit(f"Error writing {CHR_OUT_FILE}")
 
-    print(f"Wrote {PRG_FILE} and {CHR_FILE}")
+    print(f"Wrote {PRG_OUT_FILE} and {CHR_OUT_FILE}")
 
 main()
