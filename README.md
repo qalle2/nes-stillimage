@@ -14,9 +14,8 @@ Examples (screenshots from FCEUX):
 
 ![shareware DOS Doom title screen, 24*16 tiles](snap-doom-24x16.png)
 ![shareware DOS Doom title screen, 20*18 tiles](snap-doom-20x18.png)
+![shareware DOS Doom title screen, 18*20 tiles](snap-doom-18x20.png)
 ![shareware DOS Doom title screen, 16*24 tiles](snap-doom-16x24.png)
-![ethically sourced Lena photo, 24*16 tiles](snap-lena-24x16.png)
-![ethically sourced Lena photo, 16*24 tiles](snap-lena-16x24.png)
 
 ## png2nesdata.py
 A Python program that converts an image (e.g. PNG) into NES graphics data. Requires the [Pillow](https://python-pillow.org) module.
@@ -26,6 +25,7 @@ Command line arguments: *inputFile outputColour0 outputColour1 outputColour2 out
   * size (width&times;height) must be one of these:
     * 192&times;128 pixels (24&times;16 NES tiles)
     * 160&times;144 pixels (20&times;18 NES tiles)
+    * 144&times;160 pixels (18&times;20 NES tiles)
     * 128&times;192 pixels (16&times;24 NES tiles)
   * may only contain these colours (hexadecimal RRGGBB): `000000`, `555555`, `aaaaaa`, `ffffff`
   * there are examples under `test-in/`
