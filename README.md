@@ -31,7 +31,7 @@ Command line arguments: *inputFile outputColour0 outputColour1 outputColour2 out
   * there are examples under `test-in/`
 * *outputColour0*&hellip;*outputColour3*: the output palette:
   * each colour is an NES colour index in hexadecimal (`00` to `3f`).
-  * e.g. `0f 15 26 30`
+  * optional; the default is `0f 00 10 30` (greyscale)
 
 The program writes `prg.bin` and `chr.bin`. (They will be overwritten if they already exist.)
 

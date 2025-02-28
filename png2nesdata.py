@@ -91,31 +91,19 @@ def get_prg_data(outputPalette, width, height):
     # outputPalette: a tuple of 4 ints;
     # width, height: image size in tiles
 
-    # settings for name table, attribute table, sprites and scrolling
+    # settings for attribute table, sprites and scrolling;
+    # atRects: (width, height, leftMargin, rightMargin)
     if (width, height) == (24, 16):
-        (ntTopMargin, ntBottomMargin) = (8, 6)
-        ntRects = (
-            # width, height, startIndex, leftMargin, rightMargin
-            (16, 16, 0, 4, 12),
-        )
-        (atTopMargin, atBottomMargin) = (4, 4)
+        (atTopMargin, atBottomMargin) = (4, 3)
         atRects = (
-            # width, height, leftMargin, rightMargin
             (8, 8, 2, 6),
         )
         sprStartX = 20 * 8
         sprStartY =  7 * 8 - 1
         (hScroll, vScroll) = (0, 8)
     elif (width, height) == (20, 18):
-        (ntTopMargin, ntBottomMargin) = (6, 6)
-        ntRects = (
-            # width, height, startIndex, leftMargin, rightMargin
-            (12, 16,   0, 6, 14),
-            (20,  2, 192, 6,  6),
-        )
         (atTopMargin, atBottomMargin) = (3, 3)
         atRects = (
-            # width, height, leftMargin, rightMargin
             ( 6, 8, 3, 7),
             (10, 1, 3, 3),
         )
@@ -123,15 +111,8 @@ def get_prg_data(outputPalette, width, height):
         sprStartY =  6 * 8 - 1
         (hScroll, vScroll) = (0, 0)
     elif (width, height) == (18, 20):
-        (ntTopMargin, ntBottomMargin) = (6, 4)
-        ntRects = (
-            # width, height, startIndex, leftMargin, rightMargin
-            (10, 16,   0, 8, 14),
-            (18,  4, 160, 8,  6),
-        )
         (atTopMargin, atBottomMargin) = (3, 2)
         atRects = (
-            # width, height, leftMargin, rightMargin
             (5, 8, 4, 7),
             (9, 2, 4, 3),
         )
@@ -139,15 +120,8 @@ def get_prg_data(outputPalette, width, height):
         sprStartY =  5 * 8 - 1
         (hScroll, vScroll) = (8, 8)
     elif (width, height) == (16, 24):
-        (ntTopMargin, ntBottomMargin) = (4, 2)
-        ntRects = (
-            # width, height, startIndex, leftMargin, rightMargin
-            ( 8, 16,   0, 8, 16),
-            (16,  8, 128, 8,  8),
-        )
         (atTopMargin, atBottomMargin) = (2, 1)
         atRects = (
-            # width, height, leftMargin, rightMargin
             (4, 8, 4, 8),
             (8, 4, 4, 4),
         )
@@ -157,16 +131,28 @@ def get_prg_data(outputPalette, width, height):
     else:
         sys.exit("Error (should never happen).")
 
-    # name table (32*30 bytes)
-    yield from (0x00 for i in range(ntTopMargin * 32))
-    for (w, h, si, lm, rm) in ntRects:
-        for y in range(h):
-            yield from (0x00           for x in range(lm))
-            yield from (si + y * w + x for x in range(w))
-            yield from (0x00           for x in range(rm))
-    yield from (0x00 for i in range(ntBottomMargin * 32))
+    # validate AT settings
+    if atTopMargin + atBottomMargin + sum(r[1] for r in atRects) != 15:
+        sys.exit("AT data must be 15 blocks tall.")
+    if any(r[0] + r[2] + r[3] != 16 for r in atRects):
+        sys.exit("AT data must be 16 blocks wide.")
 
-    # attribute table (8*8 bytes)
+    # name table (32*30 bytes; just multiply all AT sizes by 2)
+    yield from (0x00 for i in range(atTopMargin * 2 * 32))
+    startInd = 0
+    for (w, h, lm, rm) in atRects:
+        w  *= 2
+        h  *= 2
+        lm *= 2
+        rm *= 2
+        for y in range(h):
+            yield from (0x00                 for x in range(lm))
+            yield from (startInd + y * w + x for x in range(w))
+            yield from (0x00                 for x in range(rm))
+        startInd += w * h
+    yield from (0x00 for i in range(atBottomMargin * 2 * 32))
+
+    # attribute table (16*15 blocks, 8*8 bytes)
     atBlocks = []
     atBlocks.extend(1 for i in range(atTopMargin * 16))
     for (w, h, lm, rm) in atRects:
@@ -214,21 +200,19 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
     if (srcWidth, srcHeight) == (24, 16):
         if dstY < 16:
             # tiles (0,0)-(15,15) -> (0,0)-(15,15) (background)
-            srcX = dstX
-            srcY = dstY
+            (srcY, srcX) = (dstY, dstX)
         else:
             # tiles (16,0)-(23,15) -> (0,16)-(15,23) (sprites)
-            srcX = dstX // 2 + 16
+            srcX = 16 + dstX // 2
             srcY = (dstY - 16) * 2 + dstX % 2
     elif (srcWidth, srcHeight) == (20, 18):
         if dstY < 12:
             # tiles (0,0)-(11,15) -> (0,0)-(15,11) (background)
-            srcX = dstInd % 12
-            srcY = dstInd // 12
+            (srcY, srcX) = divmod(dstInd, 12)
         elif dstY < 14 or dstY == 14 and dstX < 8:
             # tiles (0,16)-(19,17) -> (0,12)-(15,14) (background)
-            srcX = (dstInd - 12 * 16) % 20
-            srcY = (dstInd - 12 * 16) // 20 + 16
+            (srcY, srcX) = divmod(dstInd - 16 * 12, 20)
+            srcY += 16
         elif dstY < 16:
             # unused (background)
             srcX = 0
@@ -240,32 +224,29 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
     elif (srcWidth, srcHeight) == (18, 20):
         if dstY < 10:
             # tiles (0,0)-(9,15) -> (0,0)-(15,9) (background)
-            srcX = dstInd % 10
-            srcY = dstInd // 10
+            (srcY, srcX) = divmod(dstInd, 10)
         elif dstY < 14 or dstY == 14 and dstX < 8:
             # tiles (0,16)-(17,19) -> (0,10)-(15,14) (background)
-            srcX = (dstInd - 10 * 16) % 18
-            srcY = (dstInd - 10 * 16) // 18 + 16
+            (srcY, srcX) = divmod(dstInd - 16 * 10, 18)
+            srcY += 16
         elif dstY < 16:
             # unused (background)
             srcX = 0
             srcY = 0
         else:
             # tiles (10,0)-(17,15) -> (0,16)-(15,23) (sprites)
-            srcX = dstX // 2 + 10
+            srcX = 10 + dstX // 2
             srcY = (dstY - 16) * 2 + dstX % 2
     elif (srcWidth, srcHeight) == (16, 24):
         if dstY < 8:
             # tiles (0,0)-(7,15) -> (0,0)-(15,7) (background)
-            srcX = dstX % 8
-            srcY = dstY * 2 + dstX // 8 % 2
+            (srcY, srcX) = divmod(dstInd, 8)
         elif dstY < 16:
             # tiles (0,16)-(15,23) -> (0,8)-(15,15) (background)
-            srcX = dstX
-            srcY = dstY + 8
+            (srcY, srcX) = (dstY + 8, dstX)
         else:
             # tiles (8,0)-(15,15) -> (0,16)-(15,23) (sprites)
-            srcX = dstX // 2 + 8
+            srcX = 8 + dstX // 2
             srcY = (dstY - 16) * 2 + dstX % 2
     else:
         sys.exit("Error (should never happen).")
@@ -292,19 +273,30 @@ def get_chr_data(tiles, width, height):
 
 # --- main --------------------------------------------------------------------
 
-def main():
-    # parse arguments
-    if len(sys.argv) != 6:
+def parse_arguments():
+    # parse command line arguments; return (inputFile, outputPalette)
+
+    if len(sys.argv) not in (2, 6):
         sys.exit("Converts an image into NES graphics data. See README.md.")
+
     inputFile = sys.argv[1]
-    try:
-        outputPalette = tuple(int(c, 16) for c in sys.argv[2:6])
-    except ValueError:
-        sys.exit("Output colours must be hexadecimal integers.")
+    if len(sys.argv) == 6:
+        try:
+            outputPalette = tuple(int(c, 16) for c in sys.argv[2:6])
+        except ValueError:
+            sys.exit("Output colours must be hexadecimal integers.")
+    else:
+        outputPalette = (0x0f, 0x00, 0x10, 0x30)
+
     if min(outputPalette) < 0 or max(outputPalette) > 0x3f:
         sys.exit("Output colours must be 00-3f.")
     if not os.path.isfile(inputFile):
         sys.exit("Input file not found.")
+
+    return (inputFile, outputPalette)
+
+def main():
+    (inputFile, outputPalette) = parse_arguments()
 
     # read tiles
     try:
