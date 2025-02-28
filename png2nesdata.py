@@ -8,6 +8,7 @@ except ImportError:
 
 IMAGE_SIZES = (  # (width, height) in tiles
     (24, 16),
+    (20, 18),
     (16, 24),
 )
 INPUT_PALETTE = (  # (red, green, blue)
@@ -66,25 +67,60 @@ def get_tiles(image):
 
 # --- get_prg_data ------------------------------------------------------------
 
+def encode_at_data(atData):
+    # encode attribute table data
+    # atData:   a list of 240 (16*15) 2-bit ints
+    # generate: 64 8-bit ints
+
+    # pad to 16*16 attribute blocks (last one unused by the NES)
+    atData.extend(16 * [0])
+
+    for y in range(8):
+        for x in range(8):
+            si = (y * 16 + x) * 2  # source index
+            yield (
+                   atData[si]
+                | (atData[si+1]    << 2)
+                | (atData[si+16]   << 4)
+                | (atData[si+16+1] << 6)
+            )
+
 def get_prg_data(outputPalette, width, height):
     # generate each byte of PRG data;
     # outputPalette: a tuple of 4 ints;
     # width, height: image size in tiles
 
-    # settings for name table, attribute table and sprites
+    # settings for name table, attribute table, sprites and scrolling
     if (width, height) == (24, 16):
         (ntTopMargin, ntBottomMargin) = (8, 6)
         ntRects = (
             # width, height, startIndex, leftMargin, rightMargin
             (16, 16, 0, 4, 12),
         )
-        (atTopMargin, atBottomMargin) = (2, 2)
+        (atTopMargin, atBottomMargin) = (4, 4)
         atRects = (
             # width, height, leftMargin, rightMargin
-            (4, 4, 1, 3),
+            (8, 8, 2, 6),
         )
-        sprStartY = 4 * 16 - 8 - 1
         sprStartX = 20 * 8
+        sprStartY =  7 * 8 - 1
+        (hScroll, vScroll) = (0, 8)
+    elif (width, height) == (20, 18):
+        (ntTopMargin, ntBottomMargin) = (6, 6)
+        ntRects = (
+            # width, height, startIndex, leftMargin, rightMargin
+            (12, 16,   0, 6, 14),
+            (20,  2, 192, 6,  6),
+        )
+        (atTopMargin, atBottomMargin) = (3, 3)
+        atRects = (
+            # width, height, leftMargin, rightMargin
+            ( 6, 8, 3, 7),
+            (10, 1, 3, 3),
+        )
+        sprStartX = 18 * 8
+        sprStartY =  6 * 8 - 1
+        (hScroll, vScroll) = (0, 0)
     elif (width, height) == (16, 24):
         (ntTopMargin, ntBottomMargin) = (4, 2)
         ntRects = (
@@ -92,14 +128,15 @@ def get_prg_data(outputPalette, width, height):
             ( 8, 16,   0, 8, 16),
             (16,  8, 128, 8,  8),
         )
-        (atTopMargin, atBottomMargin) = (1, 1)
+        (atTopMargin, atBottomMargin) = (2, 1)
         atRects = (
             # width, height, leftMargin, rightMargin
-            (2, 4, 2, 4),
-            (4, 2, 2, 2),
+            (4, 8, 4, 8),
+            (8, 4, 4, 4),
         )
-        sprStartY = 2 * 16 - 8 - 1
         sprStartX = 16 * 8
+        sprStartY =  3 * 8 - 1
+        (hScroll, vScroll) = (0, 8)
     else:
         sys.exit("Error (should never happen).")
 
@@ -113,13 +150,15 @@ def get_prg_data(outputPalette, width, height):
     yield from (0x00 for i in range(ntBottomMargin * 32))
 
     # attribute table (8*8 bytes)
-    yield from (0x55 for i in range(atTopMargin * 8))
+    atBlocks = []
+    atBlocks.extend(1 for i in range(atTopMargin * 16))
     for (w, h, lm, rm) in atRects:
         for y in range(h):
-            yield from (0x55 for i in range(lm))
-            yield from (0x00 for i in range(w))
-            yield from (0x55 for i in range(rm))
-    yield from (0x55 for i in range(atBottomMargin * 8))
+            atBlocks.extend(1 for i in range(lm))
+            atBlocks.extend(0 for i in range(w))
+            atBlocks.extend(1 for i in range(rm))
+    atBlocks.extend(1 for i in range(atBottomMargin * 16))
+    yield from encode_at_data(atBlocks)
 
     # sprites (64*4 bytes)
     for y in range(8):
@@ -141,7 +180,7 @@ def get_prg_data(outputPalette, width, height):
         yield from (outputPalette[0], 0x00, 0x00, 0x00)  # SPR1-SPR3 (unused)
 
     # horizontal & vertical scroll
-    yield from (0, 8)
+    yield from (hScroll, vScroll)
 
 # --- get_chr_data ------------------------------------------------------------
 
@@ -153,7 +192,7 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
     # note: the NES requires the tiles of each sprite to be in consecutive
     #       indexes, the first of which must be even
 
-    (dstY, dstX) = divmod(dstInd, 16)  # max. (15, 23)
+    (dstY, dstX) = divmod(dstInd, 16)  # max. (23, 15)
 
     if (srcWidth, srcHeight) == (24, 16):
         if dstY < 16:
@@ -163,6 +202,23 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
         else:
             # tiles (16,0)-(23,15) -> (0,16)-(15,23) (sprites)
             srcX = dstX // 2 + 16
+            srcY = (dstY - 16) * 2 + dstX % 2
+    elif (srcWidth, srcHeight) == (20, 18):
+        if dstY < 12:
+            # tiles (0,0)-(11,15) -> (0,0)-(15,11) (background)
+            srcX = dstInd % 12
+            srcY = dstInd // 12
+        elif dstY < 14 or dstY == 14 and dstX < 8:
+            # tiles (0,16)-(19,17) -> (0,12)-(15,14) (background)
+            srcX = (dstInd - 12 * 16) % 20
+            srcY = (dstInd - 12 * 16) // 20 + 16
+        elif dstY < 16:
+            # unused (background)
+            srcX = 0
+            srcY = 0
+        else:
+            # tiles (12,0)-(19,15) -> (0,16)-(15,23) (sprites)
+            srcX = dstX // 2 + 12
             srcY = (dstY - 16) * 2 + dstX % 2
     elif (srcWidth, srcHeight) == (16, 24):
         if dstY < 8:
@@ -195,7 +251,7 @@ def get_chr_data(tiles, width, height):
     # generate encoded tiles in correct order;
     # tiles: list of tuples of 64 2-bit ints;
     # width, height: image size in tiles
-    for i in range(len(tiles)):
+    for i in range(16 * 24):
         srcInd = convert_tile_index(i, width, height)
         for byte in encode_tile(tiles[srcInd]):
             yield byte

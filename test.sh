@@ -3,6 +3,9 @@ rm -f test-out/*.nes
 python3 png2nesdata.py test-in/doom-24x16.png 0f 15 26 30
 asm6 stillimage.asm test-out/doom-24x16.nes
 
+python3 png2nesdata.py test-in/doom-20x18.png 0f 15 26 30
+asm6 stillimage.asm test-out/doom-20x18.nes
+
 python3 png2nesdata.py test-in/doom-16x24.png 0f 15 26 30
 asm6 stillimage.asm test-out/doom-16x24.nes
 

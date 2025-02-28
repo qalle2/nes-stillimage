@@ -96,6 +96,16 @@ reset           ; initialise the NES
                 dex
                 bne -
 
+                ldy #$27                ; fill AT1 with palette 1
+                lda #$c0
+                jsr set_ppu_addr        ; Y*$100+A -> address
+                lda #%01010101
+                ldx #0
+-               sta ppu_data
+                inx
+                cpx #64
+                bne -
+
                 jsr wait_vbl_start      ; wait until next VBlank starts
 
                 lda #hscroll
