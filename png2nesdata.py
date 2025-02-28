@@ -6,13 +6,13 @@ try:
 except ImportError:
     sys.exit("Pillow module required. See https://python-pillow.org")
 
-IMAGE_SIZES = (  # (width, height) in tiles
-    (26, 14),
-    (24, 16),
-    (20, 18),
-    (18, 20),
-    (16, 24),
-    (14, 26),
+IMAGE_SIZES = (  # (width, height) in attribute blocks (16*16 pixels each)
+    (13,  7),
+    (12,  8),
+    (10,  9),
+    ( 9, 10),
+    ( 8, 12),
+    ( 7, 13),
 )
 INPUT_PALETTE = (  # (red, green, blue)
     (0x00, 0x00, 0x00),
@@ -46,7 +46,7 @@ def get_tiles(image):
 
     if (
         (image.width, image.height)
-        not in ((w * 8, h * 8) for (w, h) in IMAGE_SIZES)
+        not in ((w * 16, h * 16) for (w, h) in IMAGE_SIZES)
     ):
         sys.exit(f"Unsupported image width or height.")
     if image.getcolors(4) is None:
@@ -91,101 +91,48 @@ def encode_at_data(atData):
 def get_prg_data(outputPalette, width, height):
     # generate each byte of PRG data;
     # outputPalette: a tuple of 4 ints;
-    # width, height: image size in tiles
+    # width, height: image size in attribute blocks (16 pixels)
 
-    # settings for attribute table, sprites and scrolling;
-    # atRects: (width, height, leftMargin, rightMargin)
-    if (width, height) == (26, 14):
-        (atTopMargin, atBottomMargin) = (4, 4)
-        atRects = (
-            (9, 7, 2, 5),
-        )
-        sprStartX = 20 * 8
-        sprStartY =  8 * 8 - 1
-        (hScroll, vScroll) = (0, 0)
-    elif (width, height) == (24, 16):
-        (atTopMargin, atBottomMargin) = (4, 3)
-        atRects = (
-            (8, 8, 2, 6),
-        )
-        sprStartX = 20 * 8
-        sprStartY =  7 * 8 - 1
-        (hScroll, vScroll) = (0, 8)
-    elif (width, height) == (20, 18):
-        (atTopMargin, atBottomMargin) = (3, 3)
-        atRects = (
-            ( 6, 8, 3, 7),
-            (10, 1, 3, 3),
-        )
-        sprStartX = 18 * 8
-        sprStartY =  6 * 8 - 1
-        (hScroll, vScroll) = (0, 0)
-    elif (width, height) == (18, 20):
-        (atTopMargin, atBottomMargin) = (3, 2)
-        atRects = (
-            (5, 8, 4, 7),
-            (9, 2, 4, 3),
-        )
-        sprStartX = 17 * 8
-        sprStartY =  5 * 8 - 1
-        (hScroll, vScroll) = (8, 8)
-    elif (width, height) == (16, 24):
-        (atTopMargin, atBottomMargin) = (2, 1)
-        atRects = (
-            (4, 8, 4, 8),
-            (8, 4, 4, 4),
-        )
-        sprStartX = 16 * 8
-        sprStartY =  3 * 8 - 1
-        (hScroll, vScroll) = (0, 8)
-    elif (width, height) == (14, 26):
-        (atTopMargin, atBottomMargin) = (1, 1)
-        atRects = (
-            (3, 8, 5, 8),
-            (7, 5, 5, 4),
-        )
-        sprStartX = 15 * 8
-        sprStartY =  2 * 8 - 1
-        (hScroll, vScroll) = (8, 0)
-    else:
-        sys.exit("Error (should never happen).")
-
-    # validate AT settings
-    if atTopMargin + atBottomMargin + sum(r[1] for r in atRects) != 15:
-        sys.exit("AT data must be 15 blocks tall.")
-    if any(r[0] + r[2] + r[3] != 16 for r in atRects):
-        sys.exit("AT data must be 16 blocks wide.")
+    # settings for attribute table
+    atRects = (
+        # (width, height) in AT blocks
+        (width - 4, min(height,     8)),  # at top left of image
+        (width,     max(height - 8, 0)),  # at bottom   of image
+    )
+    atTopMargin    = (15 - height + 1) // 2  # = bottom or bottom + 1
+    atBottomMargin = (15 - height    ) // 2
+    atLeftMargin   = (16 - width  + 1) // 2  # = right  or right  + 1
 
     # name table (32*30 bytes; just multiply all AT sizes by 2)
     yield from (0x00 for i in range(atTopMargin * 2 * 32))
     startInd = 0
-    for (w, h, lm, rm) in atRects:
-        w  *= 2
-        h  *= 2
-        lm *= 2
-        rm *= 2
+    for (w, h) in atRects:
+        w *= 2
+        h *= 2
         for y in range(h):
-            yield from (0x00                 for x in range(lm))
+            yield from (0x00 for x in range(atLeftMargin * 2))
             yield from (startInd + y * w + x for x in range(w))
-            yield from (0x00                 for x in range(rm))
+            yield from (0x00 for x in range(32 - atLeftMargin * 2 - w))
         startInd += w * h
     yield from (0x00 for i in range(atBottomMargin * 2 * 32))
 
     # attribute table (16*15 blocks, 8*8 bytes)
     atBlocks = []
     atBlocks.extend(1 for i in range(atTopMargin * 16))
-    for (w, h, lm, rm) in atRects:
+    for (w, h) in atRects:
         for y in range(h):
-            atBlocks.extend(1 for i in range(lm))
+            atBlocks.extend(1 for i in range(atLeftMargin))
             atBlocks.extend(0 for i in range(w))
-            atBlocks.extend(1 for i in range(rm))
+            atBlocks.extend(1 for i in range(16 - atLeftMargin - w))
     atBlocks.extend(1 for i in range(atBottomMargin * 16))
     yield from encode_at_data(atBlocks)
 
     # sprites (64*4 bytes)
+    sprStartX = ( 8 + width ) * 8
+    sprStartY = (15 - height) * 8 - 1
     for y in range(8):
         for x in range(8):
-            if height == 14 and y == 7:
+            if y >= height:
                 # unused (hide)
                 yield from (0xff, 0xff, 0xff, 0xff)
             else:
@@ -205,36 +152,39 @@ def get_prg_data(outputPalette, width, height):
     for i in range(3):
         yield from (outputPalette[0], 0x00, 0x00, 0x00)  # SPR1-SPR3 (unused)
 
-    # horizontal & vertical scroll
-    yield from (hScroll, vScroll)
+    yield from (
+             width  % 2  * 8,  # horizontal scroll
+        (1 - height % 2) * 8,  # vertical   scroll
+    )
 
 # --- get_chr_data ------------------------------------------------------------
 
 def convert_tile_index(dstInd, srcWidth, srcHeight):
     # dstInd:    tile index in destination (pattern tables; 0-383)
-    # srcWidth:  source image width in tiles
-    # srcHeight: source image height in tiles
-    # return:    tile index in source image (0 to srcWidth*srcHeight-1)
+    # srcWidth:  source image width  in attribute blocks (16 pixels each)
+    # srcHeight: source image height in attribute blocks (16 pixels each)
+    # return:    tile index in source image (0 to srcWidth*srcHeight-1),
+    #            or -1 for a blank tile
     # note: the NES requires the tiles of each sprite to be in consecutive
     #       indexes, the first of which must be even
 
     (dstY, dstX) = divmod(dstInd, 16)  # max. (23, 15)
 
-    if (srcWidth, srcHeight) == (26, 14):
+    if (srcWidth, srcHeight) == (13, 7):  # 26*14 tiles
         if dstY < 15 or dstY == 15 and dstX < 12:
             # tiles (0,0)-(17,13) -> (0,0)-(15,15) (background)
             (srcY, srcX) = divmod(dstInd, 18)
         elif dstY < 16:
             # unused (background)
-            (srcY, srcX) = (0, 0)
+            (srcY, srcX) = (0, -1)
         elif dstY < 23:
             # tiles (18,0)-(25,13) -> (0,16)-(15,22) (sprites)
-            srcX = 16 + dstX // 2
+            srcX = 18 + dstX // 2
             srcY = (dstY - 16) * 2 + dstX % 2
         else:
             # unused (sprites)
-            (srcY, srcX) = (0, 0)
-    elif (srcWidth, srcHeight) == (24, 16):
+            (srcY, srcX) = (0, -1)
+    elif (srcWidth, srcHeight) == (12, 8):  # 24*16 tiles
         if dstY < 16:
             # tiles (0,0)-(15,15) -> (0,0)-(15,15) (background)
             (srcY, srcX) = (dstY, dstX)
@@ -242,7 +192,7 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
             # tiles (16,0)-(23,15) -> (0,16)-(15,23) (sprites)
             srcX = 16 + dstX // 2
             srcY = (dstY - 16) * 2 + dstX % 2
-    elif (srcWidth, srcHeight) == (20, 18):
+    elif (srcWidth, srcHeight) == (10, 9):  # 20*18 tiles
         if dstY < 12:
             # tiles (0,0)-(11,15) -> (0,0)-(15,11) (background)
             (srcY, srcX) = divmod(dstInd, 12)
@@ -252,13 +202,12 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
             srcY += 16
         elif dstY < 16:
             # unused (background)
-            srcX = 0
-            srcY = 0
+            (srcY, srcX) = (0, -1)
         else:
             # tiles (12,0)-(19,15) -> (0,16)-(15,23) (sprites)
             srcX = dstX // 2 + 12
             srcY = (dstY - 16) * 2 + dstX % 2
-    elif (srcWidth, srcHeight) == (18, 20):
+    elif (srcWidth, srcHeight) == (9, 10):  # 18*20 tiles
         if dstY < 10:
             # tiles (0,0)-(9,15) -> (0,0)-(15,9) (background)
             (srcY, srcX) = divmod(dstInd, 10)
@@ -268,13 +217,12 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
             srcY += 16
         elif dstY < 16:
             # unused (background)
-            srcX = 0
-            srcY = 0
+            (srcY, srcX) = (0, -1)
         else:
             # tiles (10,0)-(17,15) -> (0,16)-(15,23) (sprites)
             srcX = 10 + dstX // 2
             srcY = (dstY - 16) * 2 + dstX % 2
-    elif (srcWidth, srcHeight) == (16, 24):
+    elif (srcWidth, srcHeight) == (8, 12):  # 16*24 tiles
         if dstY < 8:
             # tiles (0,0)-(7,15) -> (0,0)-(15,7) (background)
             (srcY, srcX) = divmod(dstInd, 8)
@@ -285,7 +233,7 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
             # tiles (8,0)-(15,15) -> (0,16)-(15,23) (sprites)
             srcX = 8 + dstX // 2
             srcY = (dstY - 16) * 2 + dstX % 2
-    elif (srcWidth, srcHeight) == (14, 26):
+    elif (srcWidth, srcHeight) == (7, 13):  # 14*26 tiles
         if dstY < 6:
             # tiles (0,0)-(5,15) -> (0,0)-(15,5) (background)
             (srcY, srcX) = divmod(dstInd, 6)
@@ -295,8 +243,7 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
             srcY += 16
         elif dstY < 16:
             # unused (background)
-            srcX = 0
-            srcY = 0
+            (srcY, srcX) = (0, -1)
         else:
             # tiles (6,0)-(13,15) -> (0,16)-(15,23) (sprites)
             srcX = 6 + dstX // 2
@@ -304,7 +251,7 @@ def convert_tile_index(dstInd, srcWidth, srcHeight):
     else:
         sys.exit("Error (should never happen).")
 
-    return srcY * srcWidth + srcX
+    return srcY * (srcWidth * 2) + srcX
 
 def encode_tile(tile):
     # tile = 16 bytes, less significant bitplane first;
@@ -318,10 +265,11 @@ def encode_tile(tile):
 def get_chr_data(tiles, width, height):
     # generate encoded tiles in correct order;
     # tiles: list of tuples of 64 2-bit ints;
-    # width, height: image size in tiles
+    # width, height: image size in attribute blocks (16 pixels each)
     for i in range(16 * 24):
         srcInd = convert_tile_index(i, width, height)
-        for byte in encode_tile(tiles[srcInd]):
+        tileData = 64 * (3,) if srcInd == -1 else tiles[srcInd]  # -1 = unused
+        for byte in encode_tile(tileData):
             yield byte
 
 # --- main --------------------------------------------------------------------
@@ -365,7 +313,7 @@ def main():
         with open(PRG_OUT_FILE, "wb") as handle:
             handle.seek(0)
             handle.write(bytes(get_prg_data(
-                outputPalette, image.width // 8, image.height // 8
+                outputPalette, image.width // 16, image.height // 16
             )))
     except OSError:
         sys.exit(f"Error writing {PRG_OUT_FILE}")
@@ -375,7 +323,7 @@ def main():
         with open(CHR_OUT_FILE, "wb") as handle:
             handle.seek(0)
             handle.write(bytes(get_chr_data(
-                tiles, image.width // 8, image.height // 8
+                tiles, image.width // 16, image.height // 16
             )))
     except OSError:
         sys.exit(f"Error writing {CHR_OUT_FILE}")
