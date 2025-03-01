@@ -18,12 +18,13 @@ INPUT_PALETTE = (
     (0xff, 0xff, 0xff),
 )
 
+# special tiles to write
+BLANK_TILE  = 64 * (0,)  # filled with colour 0
+UNUSED_TILE = 64 * (3,)  # filled with colour 3
+
 # files to write (used by stillimage.asm)
 PRG_OUT_FILE = "prg.bin"
 CHR_OUT_FILE = "chr.bin"
-
-BLANK_TILE  = 64 * (0,)  # filled with colour 0
-UNUSED_TILE = 64 * (3,)  # filled with colour 3
 
 # --- get_tiles ---------------------------------------------------------------
 
@@ -82,30 +83,26 @@ def encode_at_data(atData):
         for x in range(8):
             si = (y * 16 + x) * 2  # source index
             yield (
-                   atData[si]
-                | (atData[si+1]    << 2)
-                | (atData[si+16]   << 4)
+                   atData[si     ]
+                | (atData[si+   1] << 2)
+                | (atData[si+16  ] << 4)
                 | (atData[si+16+1] << 6)
             )
 
-def get_prg_data(outputPalette, bgTiles, distinctBgTiles, spriteData):
+def get_prg_data(ntData, spriteData, outputPal):
     # generate each byte of PRG data;
-    # outputPalette: a tuple of 4 ints
+    # ntData:     indexes to distinct background tiles;
+    # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each;
+    # outputPal:  a tuple of 4 ints
 
     # name table (32*30 bytes)
     yield from (0x00 for i in range(2 * 32))  # top margin
-    startInd = 0
-    for i in range(32 * 28):
-        yield distinctBgTiles.index(bgTiles[i])
+    yield from ntData
 
     # attribute table (16*15 blocks, 8*8 bytes)
-    atBlocks = []
-    atBlocks.extend(0 for i in range(16))  # top margin
-    for y in range(14):
-        atBlocks.extend(0 for i in range(16))
-    yield from encode_at_data(atBlocks)
+    yield from encode_at_data(16 * 15 * [0b00])
 
-    # sprites
+    # sprites (64 * 4 bytes)
     for (i, (x, y, t)) in enumerate(spriteData):
         yield from (
             y * 16 + 8 - 1,  # Y position minus 1
@@ -117,13 +114,13 @@ def get_prg_data(outputPalette, bgTiles, distinctBgTiles, spriteData):
         yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
 
     # palette (8*4 bytes)
-    yield from outputPalette                             # BG0
-    yield from (outputPalette[0] for i in range(4))      # BG1
+    yield from outputPal                             # BG0
+    yield from (outputPal[0] for i in range(4))      # BG1
     for i in range(2):
-        yield from (outputPalette[0], 0x00, 0x00, 0x00)  # BG2-BG3 (unused)
-    yield from outputPalette                             # SPR0
+        yield from (outputPal[0], 0x00, 0x00, 0x00)  # BG2-BG3 (unused)
+    yield from outputPal                             # SPR0
     for i in range(3):
-        yield from (outputPalette[0], 0x00, 0x00, 0x00)  # SPR1-SPR3 (unused)
+        yield from (outputPal[0], 0x00, 0x00, 0x00)  # SPR1-SPR3 (unused)
 
     # horizontal and vertical scroll
     yield from (0, 8)
@@ -149,7 +146,8 @@ def get_chr_data(tiles):
 # --- main --------------------------------------------------------------------
 
 def parse_arguments():
-    # parse command line arguments; return (inputFile, outputPalette)
+    # parse command line arguments;
+    # return (input_file, output_palette)
 
     if len(sys.argv) not in (2, 6):
         sys.exit("Converts an image into NES graphics data. See README.md.")
@@ -157,29 +155,32 @@ def parse_arguments():
     inputFile = sys.argv[1]
     if len(sys.argv) == 6:
         try:
-            outputPalette = tuple(int(c, 16) for c in sys.argv[2:6])
+            outputPal = tuple(int(c, 16) for c in sys.argv[2:6])
         except ValueError:
             sys.exit("Output colours must be hexadecimal integers.")
     else:
-        outputPalette = (0x0f, 0x00, 0x10, 0x30)
+        outputPal = (0x0f, 0x00, 0x10, 0x30)
 
-    if min(outputPalette) < 0 or max(outputPalette) > 0x3f:
+    if min(outputPal) < 0 or max(outputPal) > 0x3f:
         sys.exit("Output colours must be 00-3f.")
     if not os.path.isfile(inputFile):
         sys.exit("Input file not found.")
 
-    return (inputFile, outputPalette)
+    return (inputFile, outputPal)
+
+def print_status_msg(descr, value):
+    print(f"{descr:26}: {value:3d}")
 
 def assign_tiles_to_sprites(bgTiles):
-    # assign some 1*2-tile pairs to sprites;
-    # bgTiles: list of tiles starting from top left with duplicates;
-    #          each tile is a tuple of 64 2-bit ints
+    # assign as many 1*2-tile pairs as possible to sprites instead;
+    # bgTiles: list of background tiles starting from top left, with
+    #          duplicates; each tile is a tuple of 64 2-bit ints
     # return: (new_bgTiles, sprite_data)
 
     # (x, y, upperSpriteData, lowerSpriteData); unit of x and y: 1*2 tiles
     spriteData = []
 
-    # run four rounds and find first the pairs that save the most background
+    # run many rounds to find first the pairs that save the most background
     # tiles
     for round_ in range(6):
         for sprY in range(14):
@@ -222,7 +223,7 @@ def assign_tiles_to_sprites(bgTiles):
     return (bgTiles, spriteData)
 
 def main():
-    (inputFile, outputPalette) = parse_arguments()
+    (inputFile, outputPal) = parse_arguments()
 
     # read tiles
     try:
@@ -233,56 +234,60 @@ def main():
     except OSError:
         sys.exit("Error reading input file.")
 
-    print("Total tiles:", len(bgTiles))
+    print_status_msg("Total tiles", len(bgTiles))
+    print_status_msg(
+        "Distinct colours", len(set(itertools.chain.from_iterable(bgTiles)))
+    )
 
     distinctBgTiles = set(bgTiles) | set((BLANK_TILE,))
-    print("Distinct tiles:", len(distinctBgTiles))
-    print(
-        "Tiles occurring only once:",
+    print_status_msg("Distinct tiles", len(distinctBgTiles))
+    print_status_msg(
+        "Tiles occurring only once",
         sum(1 for t in distinctBgTiles if bgTiles.count(t) == 1)
     )
 
+    # assign some background tiles to sprites instead
     (bgTiles, spriteData) = assign_tiles_to_sprites(bgTiles)
-    print("1*2-tile pairs assigned to sprites:", len(spriteData))
-
-    # sort sprites first by Y, then by X
-    spriteData.sort(key=lambda s: (s[1], s[0]))
-
-    # get distinct pairs of sprite tiles (never a bottleneck but looks tidier)
-    distinctSprTilePairs = tuple(sorted(set(
+    spriteData.sort(key=lambda s: (s[1], s[0]))  # by Y and X
+    distinctSpriteTilePairs = tuple(sorted(set(
         (t1, t2) for (x, y, t1, t2) in spriteData
     )))
-    print("Distinct sprite tile pairs:", len(distinctSprTilePairs))
-
-    # convert sprite data into (x, y, index_to_distinct_sprites)
+    # convert into (x, y, index_to_distinct_sprites)
     spriteData = tuple(
-        (x, y, distinctSprTilePairs.index((t1, t2)))
+        (x, y, distinctSpriteTilePairs.index((t1, t2)))
         for (x, y, t1, t2) in spriteData
+    )
+    print_status_msg("Sprites", len(spriteData))
+    print_status_msg(
+        "Distinct sprite tile pairs", len(distinctSpriteTilePairs)
     )
 
     # get distinct background tiles
     distinctBgTiles = tuple(sorted(set(bgTiles) | set((BLANK_TILE,))))
-    print("Distinct background tiles:", len(distinctBgTiles))
+    print_status_msg("Distinct background tiles", len(distinctBgTiles))
+
     if len(distinctBgTiles) > 256:
         sys.exit("Error: more than 256 background tiles. Cannot continue.")
 
-    # combine and pad tile data to 256+128 tiles
-    tiles = (
-        distinctBgTiles
-        + (256 - len(distinctBgTiles)) * (UNUSED_TILE,)
-        + tuple(itertools.chain.from_iterable(distinctSprTilePairs))
-        + (64 - len(distinctSprTilePairs)) * 2 * (UNUSED_TILE,)
-    )
+    # get name table data (indexes to distinct background tiles)
+    ntData = tuple(distinctBgTiles.index(t) for t in bgTiles)
 
     # write PRG data
     try:
         with open(PRG_OUT_FILE, "wb") as handle:
             handle.seek(0)
-            handle.write(bytes(get_prg_data(
-                outputPalette, bgTiles, distinctBgTiles, spriteData
-            )))
+            handle.write(bytes(get_prg_data(ntData, spriteData, outputPal)))
     except OSError:
         sys.exit(f"Error writing {PRG_OUT_FILE}")
+    print(f"Wrote {PRG_OUT_FILE}")
+
+    # combine and pad tile data to 256+128 tiles
+    tiles = (
+        distinctBgTiles
+        + (256 - len(distinctBgTiles)) * (UNUSED_TILE,)
+        + tuple(itertools.chain.from_iterable(distinctSpriteTilePairs))
+        + (64 - len(distinctSpriteTilePairs)) * 2 * (UNUSED_TILE,)
+    )
 
     # write CHR data
     try:
@@ -291,7 +296,6 @@ def main():
             handle.write(bytes(get_chr_data(tiles)))
     except OSError:
         sys.exit(f"Error writing {CHR_OUT_FILE}")
-
-    print(f"Wrote {PRG_OUT_FILE} and {CHR_OUT_FILE}")
+    print(f"Wrote {CHR_OUT_FILE}")
 
 main()
