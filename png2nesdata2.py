@@ -1,6 +1,6 @@
 # convert an image into NES graphics data using another algorithm
 
-import itertools, os, sys
+import collections, itertools, os, sys
 try:
     from PIL import Image
 except ImportError:
@@ -168,14 +168,13 @@ def parse_arguments():
 
     return (inputFile, outputPal)
 
-def print_status_msg(descr, value):
-    print(f"{descr:26}: {value:3d}")
-
-def assign_tiles_to_sprites(bgTiles):
+def assign_tiles_to_sprites(imgTiles):
     # assign as many 1*2-tile pairs as possible to sprites instead;
-    # bgTiles: list of background tiles starting from top left, with
-    #          duplicates; each tile is a tuple of 64 2-bit ints
-    # return: (new_bgTiles, sprite_data)
+    # imgTiles: list of image tiles starting from top left, with
+    #           duplicates; each tile is a tuple of 64 2-bit ints
+    # return: (background_tiles, sprite_data)
+
+    bgTiles = imgTiles.copy()
 
     # (x, y, upperSpriteData, lowerSpriteData); unit of x and y: 1*2 tiles
     spriteData = []
@@ -222,6 +221,37 @@ def assign_tiles_to_sprites(bgTiles):
 
     return (bgTiles, spriteData)
 
+def get_tile_distance(tile1, tile2):
+    # tile1, tile2: tuple of 64 2-bit ints
+    return sum(abs(a - b) for (a, b) in zip(tile1, tile2))
+
+def get_tile_to_replace(distinctTiles, tileCounts):
+    # which distinct tile to eliminate with the smallest error possible?
+    # slow;
+    # distinctTiles: sorted distinct tiles in the image;
+    #                each tile is a tuple of 64 2-bit ints;
+    # tileCounts:    {tile_index: count_in_image, ...}
+    # return:        tile index to replace: (from, to); from is never 0
+    minTotalDiff = -1
+    for (fromInd, fromTile) in enumerate(distinctTiles):
+        if fromInd > 0:
+            # find the closest match for this tile
+            minDiff = -1
+            for (toInd, toTile) in enumerate(distinctTiles):
+                if toInd != fromInd:
+                    dist = get_tile_distance(fromTile, toTile)
+                    if minDiff == -1 or dist < minDiff:
+                        minDiff   = dist
+                        bestToInd = toInd
+            # remember this tile and its replacement if they result in the
+            # smallest total error so far
+            totalDiff = minDiff * tileCounts[fromInd]
+            if minTotalDiff == -1 or totalDiff < minTotalDiff:
+                minTotalDiff     = totalDiff
+                bestFromInd      = fromInd
+                overallBestToInd = bestToInd
+    return (bestFromInd, overallBestToInd)
+
 def main():
     (inputFile, outputPal) = parse_arguments()
 
@@ -230,44 +260,55 @@ def main():
         with open(inputFile, "rb") as handle:
             handle.seek(0)
             image = Image.open(handle)
-            bgTiles = list(get_tiles(image))
+            imgTiles = list(get_tiles(image))
     except OSError:
         sys.exit("Error reading input file.")
 
-    print_status_msg("Total tiles", len(bgTiles))
-    print_status_msg(
-        "Distinct colours", len(set(itertools.chain.from_iterable(bgTiles)))
-    )
+    while True:
+        distinctImgTiles = sorted(set(imgTiles) | set((BLANK_TILE,)))
+        imgTileIndexes = [distinctImgTiles.index(t) for t in imgTiles]
+        print("Image has {} distinct tiles; {} occur only once.".format(
+            len(distinctImgTiles),
+            sum(
+                1 for i in range(len(distinctImgTiles))
+                if imgTileIndexes.count(i) == 1
+            )
+        ))
 
-    distinctBgTiles = set(bgTiles) | set((BLANK_TILE,))
-    print_status_msg("Distinct tiles", len(distinctBgTiles))
-    print_status_msg(
-        "Tiles occurring only once",
-        sum(1 for t in distinctBgTiles if bgTiles.count(t) == 1)
-    )
+        # assign some background tiles to sprites instead
+        (bgTiles, spriteData) = assign_tiles_to_sprites(imgTiles)
+        spriteData.sort(key=lambda s: (s[1], s[0]))  # by Y and X
+        distinctSpriteTilePairs = tuple(sorted(set(
+            (t1, t2) for (x, y, t1, t2) in spriteData
+        )))
+        # convert into (x, y, index_to_distinct_sprites)
+        spriteData = tuple(
+            (x, y, distinctSpriteTilePairs.index((t1, t2)))
+            for (x, y, t1, t2) in spriteData
+        )
 
-    # assign some background tiles to sprites instead
-    (bgTiles, spriteData) = assign_tiles_to_sprites(bgTiles)
-    spriteData.sort(key=lambda s: (s[1], s[0]))  # by Y and X
-    distinctSpriteTilePairs = tuple(sorted(set(
-        (t1, t2) for (x, y, t1, t2) in spriteData
-    )))
-    # convert into (x, y, index_to_distinct_sprites)
-    spriteData = tuple(
-        (x, y, distinctSpriteTilePairs.index((t1, t2)))
-        for (x, y, t1, t2) in spriteData
-    )
-    print_status_msg("Sprites", len(spriteData))
-    print_status_msg(
-        "Distinct sprite tile pairs", len(distinctSpriteTilePairs)
-    )
+        # get distinct background tiles
+        distinctBgTiles = tuple(sorted(set(bgTiles) | set((BLANK_TILE,))))
+        print("Need {} sprites and {} distinct background tiles.".format(
+            len(spriteData), len(distinctBgTiles)
+        ))
 
-    # get distinct background tiles
-    distinctBgTiles = tuple(sorted(set(bgTiles) | set((BLANK_TILE,))))
-    print_status_msg("Distinct background tiles", len(distinctBgTiles))
-
-    if len(distinctBgTiles) > 256:
-        sys.exit("Error: more than 256 background tiles. Cannot continue.")
+        if len(distinctBgTiles) <= 256:
+            break
+        else:
+            # replace a tile with one that will cause the smallest total error
+            (from_, to_) = get_tile_to_replace(
+                distinctImgTiles, collections.Counter(imgTileIndexes)
+            )
+            print("Eliminating a distinct tile with an error of {}.".format(
+                get_tile_distance(
+                    distinctImgTiles[from_], distinctImgTiles[to_]
+                ) * imgTileIndexes.count(from_)
+            ))
+            imgTiles = [
+                distinctImgTiles[to_ if i == from_ else i]
+                for i in imgTileIndexes
+            ]
 
     # get name table data (indexes to distinct background tiles)
     ntData = tuple(distinctBgTiles.index(t) for t in bgTiles)

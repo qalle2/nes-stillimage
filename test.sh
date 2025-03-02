@@ -42,8 +42,8 @@ python3 png2nesdata2.py test-in/wolf-32x28-nodith-simple.png 0f 12 24 36
 asm6 stillimage.asm test-out/wolf-32x28-nodith-simple.nes
 echo
 
-echo "This will fail:"
 python3 png2nesdata2.py test-in/wolf-32x28-nodith.png
+asm6 stillimage.asm test-out/wolf-32x28-nodith.nes
 echo
 
 rm prg.bin

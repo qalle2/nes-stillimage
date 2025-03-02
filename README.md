@@ -46,6 +46,7 @@ Command line arguments: *inputFile outputColour0 outputColour1 outputColour2 out
 * *inputFile*: the image file to read:
   * the size (width&times;height) must be 256&times;224 pixels (32&times;28 NES tiles, 16&times;14 attribute blocks)
   * may only contain these colours (hexadecimal RRGGBB): `000000`, `555555`, `aaaaaa`, `ffffff`
+  * if the image is too complex (has too many distinct tiles), it will be automatically simplified, which reduces the quality and takes a lot of time
 * *outputColour0*&hellip;*outputColour3*: the output palette:
   * each colour is an NES colour index in hexadecimal (`00` to `3f`).
   * optional; the default is `0f 00 10 30` (greyscale)
