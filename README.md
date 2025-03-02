@@ -10,14 +10,16 @@ Table of contents:
 ## Introduction
 Two programs that let you convert an image (e.g. PNG) into an NES ROM that shows the image.
 
-![title screen of shareware DOS Doom in 256&times;200 pixels and 4 shades of red, in FCEUX](snap.png)
+![title screen of shareware DOS Doom in 256&times;192 pixels and 4 shades of red, in FCEUX](snap-doom.png)
+![title screen of shareware DOS Wolfenstein 3D in 256&times;200 pixels and 4 bright colours, in FCEUX](snap-wolf.png)
 
 ## png2nesdata.py
 A Python program that converts an image (e.g. PNG) into NES graphics data. Requires the [Pillow](https://python-pillow.org) module.
 
 Command line arguments: *inputFile outputColour0 outputColour1 outputColour2 outputColour3*
 * *inputFile*: the image file to read:
-  * the size (width&times;height) must be 256&times;224 pixels (32&times;28 NES tiles, 16&times;14 attribute blocks)
+  * the width must be 8&ndash;256 pixels and a multiple of 8 pixels
+  * the height must be 16&ndash;224 pixels and a multiple of 16 pixels
   * may only contain these colours (hexadecimal RRGGBB): `000000`, `555555`, `aaaaaa`, `ffffff`
   * if the image is too complex (has too many distinct tiles), it will be automatically simplified, which reduces the quality and takes a lot of time
 * *outputColour0*&hellip;*outputColour3*: the output palette:

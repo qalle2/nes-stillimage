@@ -6,10 +6,6 @@ try:
 except ImportError:
     sys.exit("Pillow module required. See https://python-pillow.org")
 
-# size of input image in attribute blocks (16*16 pixels each)
-IMG_WIDTH  = 16
-IMG_HEIGHT = 14
-
 # palette of input image (red, green, blue)
 INPUT_PALETTE = (
     (0x00, 0x00, 0x00),
@@ -48,9 +44,10 @@ def get_colour_conv_table(image):
 def get_tiles(image):
     # generate each tile as a tuple of 64 2-bit ints
 
-    if image.width != IMG_WIDTH * 16 or image.height != IMG_HEIGHT * 16:
-        sys.exit("Image size must be 256*224 pixels.")
-
+    if not 8 <= image.width <= 256 or image.width % 8 > 0:
+        sys.exit("Image width must be 8-256 and a multiple of 8.")
+    if not 16 <= image.height <= 224 or image.height % 16 > 0:
+        sys.exit("Image height must be 16-224 and a multiple of 16.")
     if image.getcolors(4) is None:
         sys.exit("The image must have 4 colours or less.")
 
@@ -90,15 +87,23 @@ def encode_at_data(atData):
                 | (atData[si+16+1] << 6)
             )
 
-def get_prg_data(ntData, spriteData, outputPal):
+def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
     # generate each byte of PRG data;
-    # ntData:     indexes to distinct background tiles;
-    # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each;
+    # ntData:     indexes to distinct background tiles
+    # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each
     # outputPal:  a tuple of 4 ints
+    # imgWidth:   image width  in tiles
+    # imgHeight:  image height in tiles (always even)
 
-    # name table (32*30 bytes)
-    yield from (0x00 for i in range(2 * 32))  # top margin
-    yield from ntData
+    # used for sprite coordinates and background scrolling
+    xOffset = (32 - imgWidth ) * 4
+    yOffset = (30 - imgHeight) * 4
+
+    # name table (32*30 bytes); the image itself is at bottom right
+    yield from (0x00 for i in range((30 - imgHeight) * 32))  # top margin
+    for y in range(imgHeight):
+        yield from (0x00 for i in range(32 - imgWidth))  # left margin
+        yield from ntData[y*imgWidth:(y+1)*imgWidth]
 
     # attribute table (16*15 blocks, 8*8 bytes)
     yield from encode_at_data(16 * 15 * [0b00])
@@ -106,10 +111,10 @@ def get_prg_data(ntData, spriteData, outputPal):
     # sprites (64 * 4 bytes)
     for (i, (x, y, t)) in enumerate(spriteData):
         yield from (
-            y * 16 + 8 - 1,  # Y position minus 1
-            t * 2 + 1,       # tile index
-            0b00000000,      # attributes
-            x * 8,           # X position
+            yOffset + y * 16 - 1,  # Y position minus 1
+            t * 2 + 1,             # tile index
+            0b00000000,            # attributes
+            xOffset + x * 8,       # X position
         )
     for i in range(64 - len(spriteData)):
         yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
@@ -118,8 +123,7 @@ def get_prg_data(ntData, spriteData, outputPal):
     for i in range(8):
         yield from outputPal
 
-    # horizontal and vertical scroll
-    yield from (0, 8)
+    yield from (xOffset, yOffset)  # horizontal and vertical background scroll
 
 # --- get_chr_data ------------------------------------------------------------
 
@@ -164,11 +168,13 @@ def parse_arguments():
 
     return (inputFile, outputPal)
 
-def assign_tiles_to_sprites(imgTiles):
+def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
     # assign as many 1*2-tile pairs as possible to sprites instead;
-    # imgTiles: list of image tiles starting from top left, with
-    #           duplicates; each tile is a tuple of 64 2-bit ints
-    # return: (background_tiles, sprite_data)
+    # imgTiles:  list of image tiles starting from top left, with
+    #            duplicates; each tile is a tuple of 64 2-bit ints
+    # imgWidth:  image width  in tiles
+    # imgHeight: image height in tiles (always even)
+    # return:    (background_tiles, sprite_data)
 
     bgTiles = imgTiles.copy()
 
@@ -178,11 +184,11 @@ def assign_tiles_to_sprites(imgTiles):
     # run many rounds to find first the pairs that save the most background
     # tiles
     for round_ in range(6):
-        for sprY in range(14):
-            for sprX in range(32):
+        for sprY in range(imgHeight // 2):
+            for sprX in range(imgWidth):
                 # "up" = upper, "lo" = lower
-                upTilePos =  sprY * 2      * 32 + sprX
-                loTilePos = (sprY * 2 + 1) * 32 + sprX
+                upTilePos =  sprY * 2      * imgWidth + sprX
+                loTilePos = (sprY * 2 + 1) * imgWidth + sprX
 
                 # tile counts: 1 is the best; increasing values are worse;
                 # 0 (a blank tile) is the worst
@@ -214,6 +220,8 @@ def assign_tiles_to_sprites(imgTiles):
                     ))
                     bgTiles[upTilePos] = BLANK_TILE
                     bgTiles[loTilePos] = BLANK_TILE
+        if len(spriteData) == 64:
+            break
 
     return (bgTiles, spriteData)
 
@@ -260,6 +268,8 @@ def main():
             handle.seek(0)
             image = Image.open(handle)
             imgTiles = list(get_tiles(image))
+            imgWidth  = image.width  // 8
+            imgHeight = image.height // 8  # always even
     except OSError:
         sys.exit("Error reading input file.")
 
@@ -271,7 +281,9 @@ def main():
         imgTileIndexes = [distinctImgTiles.index(t) for t in imgTiles]
 
         # assign some background tiles to sprites instead
-        (bgTiles, spriteData) = assign_tiles_to_sprites(imgTiles)
+        (bgTiles, spriteData) = assign_tiles_to_sprites(
+            imgTiles, imgWidth, imgHeight
+        )
         spriteData.sort(key=lambda s: (s[1], s[0]))  # by Y and X
         distinctSpriteTilePairs = tuple(sorted(set(
             (t1, t2) for (x, y, t1, t2) in spriteData
@@ -317,7 +329,9 @@ def main():
     try:
         with open(PRG_OUT_FILE, "wb") as handle:
             handle.seek(0)
-            handle.write(bytes(get_prg_data(ntData, spriteData, outputPal)))
+            handle.write(bytes(get_prg_data(
+                ntData, spriteData, outputPal, imgWidth, imgHeight
+            )))
     except OSError:
         sys.exit(f"Error writing {PRG_OUT_FILE}")
     print(f"Wrote {PRG_OUT_FILE}")
