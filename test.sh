@@ -1,50 +1,31 @@
 rm -f test-out/*.nes
 
-echo "=== png2nesdata.py ==="
+# not supported yet
+#rm -f prg.bin chr.bin
+#python3 png2nesdata.py test-in/extracolour-12x8.png
+#asm6 stillimage.asm   test-out/extracolour-12x8.png
+#echo
+
+# not supported yet
+#rm -f prg.bin chr.bin
+#python3 png2nesdata.py test-in/lena-8x12.png 0f 16 26 30
+#asm6 stillimage.asm   test-out/lena-8x12.png
+#echo
+
+rm -f prg.bin chr.bin
+python3 png2nesdata.py test-in/pattern-16x14.png
+asm6 stillimage.asm   test-out/pattern-16x14.png
 echo
 
-python3 png2nesdata.py test-in/doom-26x14.png 0f 15 26 30
-asm6 stillimage.asm test-out/doom-26x14.nes
-
-python3 png2nesdata.py test-in/doom-24x16.png 0f 15 26 30
-asm6 stillimage.asm test-out/doom-24x16.nes
-
-python3 png2nesdata.py test-in/doom-20x18.png 0f 15 26 30
-asm6 stillimage.asm test-out/doom-20x18.nes
-
-python3 png2nesdata.py test-in/doom-18x20.png 0f 15 26 30
-asm6 stillimage.asm test-out/doom-18x20.nes
-
-python3 png2nesdata.py test-in/doom-16x24.png 0f 15 26 30
-asm6 stillimage.asm test-out/doom-16x24.nes
-
-python3 png2nesdata.py test-in/doom-14x26.png 0f 15 26 30
-asm6 stillimage.asm test-out/doom-14x26.nes
-
-python3 png2nesdata.py test-in/extracolour-24x16.png
-asm6 stillimage.asm test-out/extracolour-24x16.nes
-
-python3 png2nesdata.py test-in/lena-24x16.png 0f 16 26 30
-asm6 stillimage.asm test-out/lena-24x16.nes
-
-python3 png2nesdata.py test-in/lena-16x24.png 0f 16 26 30
-asm6 stillimage.asm test-out/lena-16x24.nes
-
-echo
-echo "=== png2nesdata2.py ==="
+rm -f prg.bin chr.bin
+python3 png2nesdata.py test-in/repeating-16x14.png
+asm6 stillimage.asm   test-out/repeating-16x14.png
 echo
 
-python3 png2nesdata2.py test-in/repeating-32x28.png
-asm6 stillimage.asm test-out/repeating-32x28.nes
-echo
+# not supported yet
+#rm -f prg.bin chr.bin
+#python3 png2nesdata.py test-in/tileindexes-8x12.png
+#asm6 stillimage.asm   test-out/tileindexes-8x12.png
+#echo
 
-python3 png2nesdata2.py test-in/wolf-32x28-nodith-simple.png 0f 12 24 36
-asm6 stillimage.asm test-out/wolf-32x28-nodith-simple.nes
-echo
-
-python3 png2nesdata2.py test-in/wolf-32x28-nodith.png
-asm6 stillimage.asm test-out/wolf-32x28-nodith.nes
-echo
-
-rm prg.bin
-rm chr.bin
+rm -f prg.bin chr.bin
