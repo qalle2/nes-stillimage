@@ -1,4 +1,4 @@
-# convert an image into NES graphics data using another algorithm
+# convert an image into NES graphics data
 
 import collections, itertools, os, sys
 try:
@@ -18,9 +18,10 @@ INPUT_PALETTE = (
     (0xff, 0xff, 0xff),
 )
 
-# special tiles to write
-BLANK_TILE  = 64 * (0,)  # filled with colour 0
-UNUSED_TILE = 64 * (3,)  # filled with colour 3
+# special values to write
+BLANK_TILE    = 64 * (0,)  # filled with colour 0
+UNUSED_TILE   = 64 * (3,)  # filled with colour 3
+UNUSED_COLOUR = 0x00       # grey (NES colour index)
 
 # files to write (used by stillimage.asm)
 PRG_OUT_FILE = "prg.bin"
@@ -113,14 +114,9 @@ def get_prg_data(ntData, spriteData, outputPal):
     for i in range(64 - len(spriteData)):
         yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
 
-    # palette (8*4 bytes)
-    yield from outputPal                             # BG0
-    yield from (outputPal[0] for i in range(4))      # BG1
-    for i in range(2):
-        yield from (outputPal[0], 0x00, 0x00, 0x00)  # BG2-BG3 (unused)
-    yield from outputPal                             # SPR0
-    for i in range(3):
-        yield from (outputPal[0], 0x00, 0x00, 0x00)  # SPR1-SPR3 (unused)
+    # palette (8*4 bytes; only BG0 and SPR0 are used)
+    for i in range(8):
+        yield from outputPal
 
     # horizontal and vertical scroll
     yield from (0, 8)
@@ -225,13 +221,14 @@ def get_tile_distance(tile1, tile2):
     # tile1, tile2: tuple of 64 2-bit ints
     return sum(abs(a - b) for (a, b) in zip(tile1, tile2))
 
-def get_tile_to_replace(distinctTiles, tileCounts):
+def get_tile_to_replace(distinctTiles, tileCounts, minPossibleError=1):
     # which distinct tile to eliminate with the smallest error possible?
     # slow;
-    # distinctTiles: sorted distinct tiles in the image;
-    #                each tile is a tuple of 64 2-bit ints;
-    # tileCounts:    {tile_index: count_in_image, ...}
-    # return:        tile index to replace: (from, to); from is never 0
+    # distinctTiles:    sorted distinct tiles in the image;
+    #                   each tile is a tuple of 64 2-bit ints;
+    # tileCounts:       {tile_index: count_in_image, ...}
+    # minPossibleError: stop searching when the error is this small;
+    # return:           tile index to replace: (from, to); from is never 0
     minTotalDiff = -1
     for (fromInd, fromTile) in enumerate(distinctTiles):
         if fromInd > 0:
@@ -250,6 +247,8 @@ def get_tile_to_replace(distinctTiles, tileCounts):
                 minTotalDiff     = totalDiff
                 bestFromInd      = fromInd
                 overallBestToInd = bestToInd
+                if minTotalDiff == minPossibleError:
+                    break
     return (bestFromInd, overallBestToInd)
 
 def main():
@@ -264,16 +263,12 @@ def main():
     except OSError:
         sys.exit("Error reading input file.")
 
+    # smallest possible error when replacing tiles
+    minTileReplError = 1
+
     while True:
         distinctImgTiles = sorted(set(imgTiles) | set((BLANK_TILE,)))
         imgTileIndexes = [distinctImgTiles.index(t) for t in imgTiles]
-        print("Image has {} distinct tiles; {} occur only once.".format(
-            len(distinctImgTiles),
-            sum(
-                1 for i in range(len(distinctImgTiles))
-                if imgTileIndexes.count(i) == 1
-            )
-        ))
 
         # assign some background tiles to sprites instead
         (bgTiles, spriteData) = assign_tiles_to_sprites(imgTiles)
@@ -289,22 +284,27 @@ def main():
 
         # get distinct background tiles
         distinctBgTiles = tuple(sorted(set(bgTiles) | set((BLANK_TILE,))))
-        print("Need {} sprites and {} distinct background tiles.".format(
-            len(spriteData), len(distinctBgTiles)
-        ))
+
+        print(
+            "Image has {} distinct tiles. Need {} sprites and {} distinct "
+            "background tiles.".format(
+                len(distinctImgTiles), len(spriteData), len(distinctBgTiles)
+            )
+        )
 
         if len(distinctBgTiles) <= 256:
             break
         else:
             # replace a tile with one that will cause the smallest total error
             (from_, to_) = get_tile_to_replace(
-                distinctImgTiles, collections.Counter(imgTileIndexes)
+                distinctImgTiles, collections.Counter(imgTileIndexes),
+                minTileReplError
             )
-            print("Eliminating a distinct tile with an error of {}.".format(
-                get_tile_distance(
-                    distinctImgTiles[from_], distinctImgTiles[to_]
-                ) * imgTileIndexes.count(from_)
-            ))
+            error = get_tile_distance(
+                distinctImgTiles[from_], distinctImgTiles[to_]
+            ) * imgTileIndexes.count(from_)
+            minTileReplError = max(minTileReplError, error)
+            print(f"Eliminating a distinct tile with an error of {error}.")
             imgTiles = [
                 distinctImgTiles[to_ if i == from_ else i]
                 for i in imgTileIndexes

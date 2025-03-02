@@ -77,7 +77,7 @@ reset           ; initialise the NES
                 lda #$00
                 jsr set_ppu_addr        ; Y*$100+A -> address
 
-                ldy #$20                ; copy NT & AT data ($400 bytes)
+                ldy #$20                ; copy NT0 & AT0 data ($400 bytes)
                 lda #$00
                 jsr set_ppu_addr        ; Y*$100+A -> address
                 ;
@@ -96,14 +96,13 @@ reset           ; initialise the NES
                 dex
                 bne -
 
-                ldy #$27                ; fill AT1 with palette 1
-                lda #$c0
-                jsr set_ppu_addr        ; Y*$100+A -> address
-                lda #%01010101
-                ldx #0
+                lda #$00                ; clear NT1 & AT1 ($400 bytes)
+                tax
+                ldy #4
 -               sta ppu_data
                 inx
-                cpx #64
+                bne -
+                dey
                 bne -
 
                 jsr wait_vbl_start      ; wait until next VBlank starts
