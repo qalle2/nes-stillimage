@@ -22,6 +22,11 @@ UNUSED_TILE   = 64 * (3,)  # filled with colour 3
 PRG_OUT_FILE = "prg.bin"
 CHR_OUT_FILE = "chr.bin"
 
+# the NES can't display more than 8 sprites per scanline or more than 64
+# sprites total; decrease these to reserve sprites for other use
+MAX_SPRITES_PER_SCANLINE =  8
+MAX_TOTAL_SPRITES        = 64
+
 # --- get_tiles ---------------------------------------------------------------
 
 def get_colour_conv_table(image):
@@ -88,8 +93,7 @@ def encode_at_data(atData):
 
 def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
     # generate each byte of PRG data;
-    # ntData:     indexes to distinct background tiles; padded to an even
-    #             height
+    # ntData:     indexes to distinct background tiles
     # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each
     # outputPal:  a tuple of 4 ints
     # imgWidth:   image width  in tiles
@@ -111,10 +115,10 @@ def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
     # sprites (64 * 4 bytes)
     for (i, (x, y, t)) in enumerate(spriteData):
         yield from (
-            yOffset + y * 16 - 1,  # Y position minus 1
-            t * 2 + 1,             # tile index
-            0b00000000,            # attributes
-            xOffset + x * 8,       # X position
+            yOffset + y * 8 - 1,  # Y position minus 1
+            t * 2 + 1,            # tile index
+            0b00000000,           # attributes
+            xOffset + x * 8,      # X position
         )
     for i in range(64 - len(spriteData)):
         yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
@@ -172,7 +176,6 @@ def parse_arguments():
 def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
     # assign as many 1*2-tile pairs as possible to sprites instead;
     # imgTiles:  list of image tiles starting from top left, with duplicates;
-    #            if imgHeight is odd, this is one tile taller;
     #            each tile is a tuple of 64 2-bit ints
     # imgWidth:  image width  in tiles
     # imgHeight: image height in tiles
@@ -183,46 +186,36 @@ def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
     # (x, y, upperSpriteData, lowerSpriteData); unit of x and y: 1*2 tiles
     spriteData = []
 
-    # run many rounds to find first the pairs that save the most background
-    # tiles
-    for round_ in range(6):  # TODO: is this necessary?
-        for sprY in range((imgHeight + 1) // 2):  # round up
-            for sprX in range(imgWidth):
-                # "up" = upper, "lo" = lower
-                upTilePos =  sprY * 2      * imgWidth + sprX
-                loTilePos = (sprY * 2 + 1) * imgWidth + sprX
+    if min(MAX_SPRITES_PER_SCANLINE, MAX_TOTAL_SPRITES) == 0:
+        return (bgTiles, spriteData)
 
-                # tile counts: 1 is the best; increasing values are worse;
-                # 0 (a blank tile) is the worst
-                if bgTiles[upTilePos] == BLANK_TILE:
-                    upTileCnt = 0
-                else:
-                    upTileCnt = bgTiles.count(bgTiles[upTilePos])
-                if bgTiles[loTilePos] == BLANK_TILE:
-                    loTileCnt = 0
-                else:
-                    loTileCnt = bgTiles.count(bgTiles[loTilePos])
-
+    # replace 1*2-tile pairs where both tiles are non-blank and unique within
+    # the image; this way each sprite saves 2 background tiles;
+    # if the height is odd, don't bother looking at the last row
+    for sprY in range(0, imgHeight - 1, 2):
+        spritesPerRow = 0
+        for sprX in range(imgWidth):
+            upperTilePos =  sprY      * imgWidth + sprX
+            lowerTilePos = (sprY + 1) * imgWidth + sprX
+            if (
+                    bgTiles[upperTilePos] != BLANK_TILE
+                and bgTiles[lowerTilePos] != BLANK_TILE
+                and bgTiles.count(bgTiles[upperTilePos]) == 1
+                and bgTiles.count(bgTiles[lowerTilePos]) == 1
+            ):
+                # move tiles from background to sprites
+                spriteData.append((
+                    sprX, sprY, bgTiles[upperTilePos], bgTiles[lowerTilePos]
+                ))
+                bgTiles[upperTilePos] = BLANK_TILE
+                bgTiles[lowerTilePos] = BLANK_TILE
+                spritesPerRow += 1
                 if (
-                    (
-                           round_ >= 0 and  upTileCnt == 1 and loTileCnt == 1
-                        or round_ >= 1 and (upTileCnt == 1 or  loTileCnt == 1)
-                        or round_ >= 2 and  upTileCnt == 2 and loTileCnt == 2
-                        or round_ >= 3 and (upTileCnt == 2 or  loTileCnt == 2)
-                        or round_ >= 4 and  upTileCnt == 3 and loTileCnt == 3
-                        or round_ >= 5 and (upTileCnt == 3 or  loTileCnt == 3)
-                    )
-                    and len(spriteData) < 64
-                    and sum(1 for s in spriteData if s[1] == sprY) < 8
+                    spritesPerRow == MAX_SPRITES_PER_SCANLINE
+                    or len(spriteData) == MAX_TOTAL_SPRITES
                 ):
-                    # copy tiles from background to sprites
-                    spriteData.append((
-                        sprX, sprY,
-                        bgTiles[upTilePos], bgTiles[loTilePos]
-                    ))
-                    bgTiles[upTilePos] = BLANK_TILE
-                    bgTiles[loTilePos] = BLANK_TILE
-        if len(spriteData) == 64:
+                    break
+        if len(spriteData) == MAX_TOTAL_SPRITES:
             break
 
     return (bgTiles, spriteData)
@@ -274,10 +267,6 @@ def main():
             imgHeight = image.height // 8
     except OSError:
         sys.exit("Error reading input file.")
-
-    # if the height is odd, pretend there's an extra row of blank tiles
-    if imgHeight % 2 > 0:
-        imgTiles.extend(BLANK_TILE for i in range(imgWidth))
 
     # smallest possible error when replacing tiles
     minTileReplError = 1
