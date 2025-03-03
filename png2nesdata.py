@@ -88,19 +88,16 @@ def encode_at_data(atData):
 
 def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
     # generate each byte of PRG data;
-    # ntData:     indexes to distinct background tiles;
-    #             if imgHeight is odd, this will be one tile taller
+    # ntData:     indexes to distinct background tiles; padded to an even
+    #             height
     # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each
     # outputPal:  a tuple of 4 ints
     # imgWidth:   image width  in tiles
     # imgHeight:  image height in tiles
 
-    ntDataHeight = len(ntData) // imgWidth  # always even
-
-    # name table (32*30 bytes); the image itself is at bottom right, except
-    # if its height is odd, it will have one blank row under it
-    yield from (0x00 for i in range((30 - ntDataHeight) * 32))  # top margin
-    for y in range(ntDataHeight):
+    # name table (32*30 bytes); the image itself is at bottom right
+    yield from (0x00 for i in range((30 - imgHeight) * 32))  # top margin
+    for y in range(imgHeight):
         yield from (0x00 for i in range(32 - imgWidth))  # left margin
         yield from ntData[y*imgWidth:(y+1)*imgWidth]
 
@@ -108,18 +105,16 @@ def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
     yield from encode_at_data(16 * 15 * [0b00])
 
     # offsets for sprite coordinates and background scrolling
-    # (bgYOffset needs to take name table layout into account; see above)
-    xOffset    = (32 - imgWidth ) * 4
-    sprYOffset = (30 - imgHeight) * 4
-    bgYOffset  = (15 - ntDataHeight // 2) * 8 - imgHeight % 2 * 4
+    xOffset = (32 - imgWidth ) * 4
+    yOffset = (30 - imgHeight) * 4
 
     # sprites (64 * 4 bytes)
     for (i, (x, y, t)) in enumerate(spriteData):
         yield from (
-            sprYOffset + y * 16 - 1,  # Y position minus 1
-            t * 2 + 1,                # tile index
-            0b00000000,               # attributes
-            xOffset + x * 8,          # X position
+            yOffset + y * 16 - 1,  # Y position minus 1
+            t * 2 + 1,             # tile index
+            0b00000000,            # attributes
+            xOffset + x * 8,       # X position
         )
     for i in range(64 - len(spriteData)):
         yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
@@ -129,7 +124,7 @@ def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
         yield from outputPal
 
     # horizontal and vertical background scroll
-    yield from (xOffset, bgYOffset)
+    yield from (xOffset, yOffset)
 
 # --- get_chr_data ------------------------------------------------------------
 
