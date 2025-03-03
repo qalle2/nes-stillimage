@@ -17,7 +17,6 @@ INPUT_PALETTE = (
 # special values to write
 BLANK_TILE    = 64 * (0,)  # filled with colour 0
 UNUSED_TILE   = 64 * (3,)  # filled with colour 3
-UNUSED_COLOUR = 0x00       # grey (NES colour index)
 
 # files to write (used by stillimage.asm)
 PRG_OUT_FILE = "prg.bin"
@@ -46,8 +45,8 @@ def get_tiles(image):
 
     if not 8 <= image.width <= 256 or image.width % 8 > 0:
         sys.exit("Image width must be 8-256 and a multiple of 8.")
-    if not 16 <= image.height <= 224 or image.height % 16 > 0:
-        sys.exit("Image height must be 16-224 and a multiple of 16.")
+    if not 8 <= image.height <= 224 or image.height % 8 > 0:
+        sys.exit("Image height must be 8-224 and a multiple of 8.")
     if image.getcolors(4) is None:
         sys.exit("The image must have 4 colours or less.")
 
@@ -89,32 +88,38 @@ def encode_at_data(atData):
 
 def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
     # generate each byte of PRG data;
-    # ntData:     indexes to distinct background tiles
+    # ntData:     indexes to distinct background tiles;
+    #             if imgHeight is odd, this will be one tile taller
     # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each
     # outputPal:  a tuple of 4 ints
     # imgWidth:   image width  in tiles
-    # imgHeight:  image height in tiles (always even)
+    # imgHeight:  image height in tiles
 
-    # used for sprite coordinates and background scrolling
-    xOffset = (32 - imgWidth ) * 4
-    yOffset = (30 - imgHeight) * 4
+    ntDataHeight = len(ntData) // imgWidth  # always even
 
-    # name table (32*30 bytes); the image itself is at bottom right
-    yield from (0x00 for i in range((30 - imgHeight) * 32))  # top margin
-    for y in range(imgHeight):
+    # name table (32*30 bytes); the image itself is at bottom right, except
+    # if its height is odd, it will have one blank row under it
+    yield from (0x00 for i in range((30 - ntDataHeight) * 32))  # top margin
+    for y in range(ntDataHeight):
         yield from (0x00 for i in range(32 - imgWidth))  # left margin
         yield from ntData[y*imgWidth:(y+1)*imgWidth]
 
     # attribute table (16*15 blocks, 8*8 bytes)
     yield from encode_at_data(16 * 15 * [0b00])
 
+    # offsets for sprite coordinates and background scrolling
+    # (bgYOffset needs to take name table layout into account; see above)
+    xOffset    = (32 - imgWidth ) * 4
+    sprYOffset = (30 - imgHeight) * 4
+    bgYOffset  = (15 - ntDataHeight // 2) * 8 - imgHeight % 2 * 4
+
     # sprites (64 * 4 bytes)
     for (i, (x, y, t)) in enumerate(spriteData):
         yield from (
-            yOffset + y * 16 - 1,  # Y position minus 1
-            t * 2 + 1,             # tile index
-            0b00000000,            # attributes
-            xOffset + x * 8,       # X position
+            sprYOffset + y * 16 - 1,  # Y position minus 1
+            t * 2 + 1,                # tile index
+            0b00000000,               # attributes
+            xOffset + x * 8,          # X position
         )
     for i in range(64 - len(spriteData)):
         yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
@@ -123,7 +128,8 @@ def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
     for i in range(8):
         yield from outputPal
 
-    yield from (xOffset, yOffset)  # horizontal and vertical background scroll
+    # horizontal and vertical background scroll
+    yield from (xOffset, bgYOffset)
 
 # --- get_chr_data ------------------------------------------------------------
 
@@ -170,10 +176,11 @@ def parse_arguments():
 
 def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
     # assign as many 1*2-tile pairs as possible to sprites instead;
-    # imgTiles:  list of image tiles starting from top left, with
-    #            duplicates; each tile is a tuple of 64 2-bit ints
+    # imgTiles:  list of image tiles starting from top left, with duplicates;
+    #            if imgHeight is odd, this is one tile taller;
+    #            each tile is a tuple of 64 2-bit ints
     # imgWidth:  image width  in tiles
-    # imgHeight: image height in tiles (always even)
+    # imgHeight: image height in tiles
     # return:    (background_tiles, sprite_data)
 
     bgTiles = imgTiles.copy()
@@ -183,8 +190,8 @@ def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
 
     # run many rounds to find first the pairs that save the most background
     # tiles
-    for round_ in range(6):
-        for sprY in range(imgHeight // 2):
+    for round_ in range(6):  # TODO: is this necessary?
+        for sprY in range((imgHeight + 1) // 2):  # round up
             for sprX in range(imgWidth):
                 # "up" = upper, "lo" = lower
                 upTilePos =  sprY * 2      * imgWidth + sprX
@@ -269,9 +276,13 @@ def main():
             image = Image.open(handle)
             imgTiles = list(get_tiles(image))
             imgWidth  = image.width  // 8
-            imgHeight = image.height // 8  # always even
+            imgHeight = image.height // 8
     except OSError:
         sys.exit("Error reading input file.")
+
+    # if the height is odd, pretend there's an extra row of blank tiles
+    if imgHeight % 2 > 0:
+        imgTiles.extend(BLANK_TILE for i in range(imgWidth))
 
     # smallest possible error when replacing tiles
     minTileReplError = 1
