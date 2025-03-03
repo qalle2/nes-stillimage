@@ -21,7 +21,7 @@ Command line arguments: *inputFile outputColour0 outputColour1 outputColour2 out
   * the width must be 8&ndash;256 pixels and a multiple of 8 pixels
   * the height must be 8&ndash;224 pixels and a multiple of 8 pixels
   * may only contain these colours (hexadecimal RRGGBB): `000000`, `555555`, `aaaaaa`, `ffffff`
-  * if the image is too complex (has too many distinct tiles), it will be automatically simplified, which reduces the quality and takes a lot of time
+  * if the image is too complex (has too many distinct tiles), it will be automatically simplified which reduces the quality
 * *outputColour0*&hellip;*outputColour3*: the output palette:
   * each colour is an NES colour index in hexadecimal (`00` to `3f`).
   * optional; the default is `0f 00 10 30` (greyscale)
@@ -49,6 +49,8 @@ To assemble, run `asm6 stillimage.asm output.nes`
   * vertical scroll value
 
 ## Sources of images
+* `apogee`: *Apogee &ndash; the height of gaming excitement* screen by Apogee
 * `doom`: shareware version of *Doom* by id Software
+* `keen4`: *Commander Keen: Secret of the Oracle* by id Software
 * `lena`: [Ethically sourced Lena picture](https://mortenhannemose.github.io/lena/) by Morten Hannemose
 * `wolf`: shareware version of *Wolfenstein 3D* by id Software

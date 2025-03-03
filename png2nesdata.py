@@ -42,7 +42,30 @@ BLANK_TILE_INDEX = 0
 BLANK_TILE  = TILE_WIDTH * TILE_HEIGHT * (0,)  # filled with colour 0
 UNUSED_TILE = TILE_WIDTH * TILE_HEIGHT * (3,)  # filled with colour 3
 
-# --- get_tiles ---------------------------------------------------------------
+# --- functions except main ---------------------------------------------------
+
+def parse_arguments():
+    # parse command line arguments;
+    # return (input_file, output_palette)
+
+    if len(sys.argv) not in (2, 6):
+        sys.exit("Converts an image into NES graphics data. See README.md.")
+
+    inputFile = sys.argv[1]
+    if len(sys.argv) == 6:
+        try:
+            outputPal = tuple(int(c, 16) for c in sys.argv[2:6])
+        except ValueError:
+            sys.exit("Output colours must be hexadecimal integers.")
+    else:
+        outputPal = DEFAULT_OUT_PALETTE
+
+    if min(outputPal) < 0 or max(outputPal) > 0x3f:
+        sys.exit("Output colours must be 00-3f.")
+    if not os.path.isfile(inputFile):
+        sys.exit("Input file not found.")
+
+    return (inputFile, outputPal)
 
 def get_colour_conv_table(image):
     # get palette in [R, G, B, ...] format
@@ -88,110 +111,9 @@ def get_tiles(image):
                 ).getdata()
             )
 
-# --- get_prg_data ------------------------------------------------------------
-
-def encode_at_data(atData):
-    # encode attribute table data
-    # atData:   a list of 240 (16*15) 2-bit ints
-    # generate: 64 8-bit ints
-
-    # pad to 16*16 attribute blocks (last one unused by the NES)
-    atData.extend(16 * [0])
-
-    for y in range(8):
-        for x in range(8):
-            si = (y * 16 + x) * 2  # source index
-            yield (
-                   atData[si     ]
-                | (atData[si+   1] << 2)
-                | (atData[si+16  ] << 4)
-                | (atData[si+16+1] << 6)
-            )
-
-def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
-    # generate each byte of PRG data;
-    # ntData:     indexes to distinct background tiles
-    # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each
-    # outputPal:  a tuple of 4 ints
-    # imgWidth:   image width  in tiles
-    # imgHeight:  image height in tiles
-
-    # name table; (NT_WIDTH * NT_HEIGHT) bytes; the image itself is at bottom
-    # right
-    # top margin
-    yield from (0x00 for i in range((NT_HEIGHT - imgHeight) * NT_WIDTH))
-    for y in range(imgHeight):
-        yield from (0x00 for i in range(NT_WIDTH - imgWidth))  # left margin
-        yield from ntData[y*imgWidth:(y+1)*imgWidth]
-
-    # attribute table (16*15 blocks, 8*8 bytes)
-    yield from encode_at_data(16 * 15 * [0b00])
-
-    # offsets for sprite coordinates and background scrolling
-    xOffset = (NT_WIDTH  - imgWidth ) * 4
-    yOffset = (NT_HEIGHT - imgHeight) * 4
-
-    # sprites (MAX_SPRITES * 4 bytes)
-    for (i, (x, y, t)) in enumerate(spriteData):
-        yield from (
-            yOffset + y * TILE_HEIGHT - 1,  # Y position minus 1
-            t * 2 + 1,                      # tile index
-            0b00000000,                     # attributes
-            xOffset + x * TILE_WIDTH,       # X position
-        )
-    for i in range(MAX_SPRITES - len(spriteData)):
-        yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
-
-    # palette (4 bytes)
-    yield from outputPal
-
-    # horizontal and vertical background scroll
-    yield from (xOffset, yOffset)
-
-# --- get_chr_data ------------------------------------------------------------
-
-def encode_tile(tile):
-    # tile = (TILE_WIDTH * TILE_HEIGHT / 4) bytes, less significant bitplane
-    # first;
-    # generate one integer with TILE_WIDTH bits per call
-    for bp in range(2):
-        for y in range(0, TILE_HEIGHT * TILE_WIDTH, TILE_WIDTH):
-            yield sum(
-                ((tile[y+x] >> bp) & 1) << (TILE_WIDTH - 1 - x)
-                for x in range(TILE_WIDTH)
-            )
-
-def get_chr_data(tiles):
-    # generate encoded tiles;
-    # tiles: list of tuples of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
-    for tile in tiles:
-        for byte in encode_tile(tile):
-            yield byte
-
-# --- main --------------------------------------------------------------------
-
-def parse_arguments():
-    # parse command line arguments;
-    # return (input_file, output_palette)
-
-    if len(sys.argv) not in (2, 6):
-        sys.exit("Converts an image into NES graphics data. See README.md.")
-
-    inputFile = sys.argv[1]
-    if len(sys.argv) == 6:
-        try:
-            outputPal = tuple(int(c, 16) for c in sys.argv[2:6])
-        except ValueError:
-            sys.exit("Output colours must be hexadecimal integers.")
-    else:
-        outputPal = DEFAULT_OUT_PALETTE
-
-    if min(outputPal) < 0 or max(outputPal) > 0x3f:
-        sys.exit("Output colours must be 00-3f.")
-    if not os.path.isfile(inputFile):
-        sys.exit("Input file not found.")
-
-    return (inputFile, outputPal)
+def get_tile_distance(tile1, tile2):
+    # tile1, tile2: tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
+    return sum(abs(a - b) for (a, b) in zip(tile1, tile2))
 
 def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
     # assign as many 1*2-tile pairs as possible to sprites instead
@@ -241,39 +163,107 @@ def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
 
     return (bgTiles, spriteData)
 
-def get_tile_distance(tile1, tile2):
-    # tile1, tile2: tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
-    return sum(abs(a - b) for (a, b) in zip(tile1, tile2))
-
-def get_tile_to_replace(distinctTiles, tileCounts, minPossibleError=1):
+def get_tile_to_replace(
+    origTileCnt, tileDistances, tileCnts, distinctTilesLeft
+):
     # which distinct tile to eliminate with the smallest error possible?
-    # TODO: make this faster;
-    # distinctTiles:    sorted distinct tiles in the image; each tile is a
-    #                   tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints;
-    # tileCounts:       {tile_index: count_in_image, ...}
-    # minPossibleError: stop searching when the error is this small;
-    # return:           tile to replace: (from_index, to_index)
+    #   origTileCnt:       original number of distinct tiles
+    #   tileDistances:     a look-up table for distances between tiles;
+    #                      index: (tile_index1 * origTileCnt + tile_index2)
+    #   tileCnts:          {tile_index: count_in_image, ...}
+    #   distinctTilesLeft: set of indexes to original distinct tiles
+    #   return:            tile to replace: (from_index, to_index)
+
     minTotalDiff = -1
-    for (fromInd, fromTile) in enumerate(distinctTiles):
+    for fromInd in distinctTilesLeft:
         if fromInd != BLANK_TILE_INDEX:
             # find the closest match for this tile
             minDiff = -1
-            for (toInd, toTile) in enumerate(distinctTiles):
+            for toInd in distinctTilesLeft:
                 if toInd != fromInd:
-                    dist = get_tile_distance(fromTile, toTile)
+                    dist = tileDistances[fromInd*origTileCnt+toInd]
                     if minDiff == -1 or dist < minDiff:
                         minDiff   = dist
                         bestToInd = toInd
             # remember this tile and its replacement if they result in the
             # smallest total error so far
-            totalDiff = minDiff * tileCounts[fromInd]
+            totalDiff = minDiff * tileCnts[fromInd]
             if minTotalDiff == -1 or totalDiff < minTotalDiff:
                 minTotalDiff     = totalDiff
                 bestFromInd      = fromInd
                 overallBestToInd = bestToInd
-                if minTotalDiff == minPossibleError:
-                    break
+
     return (bestFromInd, overallBestToInd)
+
+def encode_at_data(atData):
+    # encode attribute table data
+    # atData:   a list of 240 (16*15) 2-bit ints
+    # generate: 64 8-bit ints
+
+    # pad to 16*16 attribute blocks (last row unused by the NES)
+    atData.extend(0b00 for i in range(16 * 16 - len(atData)))
+
+    for y in range(8):
+        for x in range(8):
+            si = (y * 16 + x) * 2  # source index
+            yield (
+                   atData[si     ]
+                | (atData[si+   1] << 2)
+                | (atData[si+16  ] << 4)
+                | (atData[si+16+1] << 6)
+            )
+
+def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
+    # generate each byte of PRG data;
+    # ntData:     indexes to distinct background tiles
+    # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each
+    # outputPal:  a tuple of 4 ints
+    # imgWidth:   image width  in tiles
+    # imgHeight:  image height in tiles
+
+    # name table; (NT_WIDTH * NT_HEIGHT) bytes;
+    # the image itself is at bottom right
+    # top margin
+    yield from (0x00 for i in range((NT_HEIGHT - imgHeight) * NT_WIDTH))
+    for y in range(imgHeight):
+        yield from (0x00 for i in range(NT_WIDTH - imgWidth))  # left margin
+        yield from ntData[y*imgWidth:(y+1)*imgWidth]
+
+    # attribute table (16*15 blocks, 8*8 bytes)
+    yield from encode_at_data(16 * 15 * [0b00])
+
+    # offsets for sprite coordinates and background scrolling
+    xOffset = (NT_WIDTH  - imgWidth ) * 4
+    yOffset = (NT_HEIGHT - imgHeight) * 4
+
+    # sprites (MAX_SPRITES * 4 bytes)
+    for (i, (x, y, t)) in enumerate(spriteData):
+        yield from (
+            yOffset + y * TILE_HEIGHT - 1,  # Y position minus 1
+            t * 2 + 1,                      # tile index
+            0b00000000,                     # attributes
+            xOffset + x * TILE_WIDTH,       # X position
+        )
+    for i in range(MAX_SPRITES - len(spriteData)):
+        yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
+
+    # palette (4 bytes)
+    yield from outputPal
+
+    # horizontal and vertical background scroll
+    yield from (xOffset, yOffset)
+
+def encode_tile(tile):
+    # tile: a tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
+    # generate one integer with TILE_WIDTH bits per call
+    for bp in range(2):
+        for y in range(0, TILE_HEIGHT * TILE_WIDTH, TILE_WIDTH):
+            yield sum(
+                ((tile[y+x] >> bp) & 1) << (TILE_WIDTH - 1 - x)
+                for x in range(TILE_WIDTH)
+            )
+
+# --- main --------------------------------------------------------------------
 
 def main():
     (inputFile, outputPal) = parse_arguments()
@@ -289,67 +279,109 @@ def main():
     except OSError:
         sys.exit("Error reading input file.")
 
-    # smallest possible error when replacing tiles
-    minTileReplError = 1
+    # what each distinct tile looks like;
+    # does not change during elimination of tiles
+    origDistinctImgTiles = sorted(set(imgTiles) | set((BLANK_TILE,)))
+    origDistinctImgTileCnt = len(origDistinctImgTiles)
 
-    # TODO: what if distinctImgTiles never changed? a precomputed table with
-    # ~1 million entries could be used to look up the differences
+    # create a look-up table of distances between any two tiles;
+    # does not change during elimination of tiles
+    origTileDistances = []
+    for tile1 in origDistinctImgTiles:
+        for tile2 in origDistinctImgTiles:
+            origTileDistances.append(get_tile_distance(tile1, tile2))
+
+    # which tile was originally in each tile position;
+    # does not change during elimination of tiles;
+    # used for calculating total error
+    origImgTileIndexes = [origDistinctImgTiles.index(t) for t in imgTiles]
+
+    # indexes to origDistinctImgTiles (what hasn't been eliminated yet)
+    distinctImgTilesLeft = set(range(origDistinctImgTileCnt))
+
+    # updated when a tile is eliminated
+    imgTileIndexes = origImgTileIndexes.copy()
+
+    print("Image has {} distinct tiles. Eliminating tiles if needed.".format(
+        origDistinctImgTileCnt
+    ))
+    eliminatedTileCnt = 0
 
     while True:
-        distinctImgTiles = sorted(set(imgTiles) | set((BLANK_TILE,)))
-        imgTileIndexes = [distinctImgTiles.index(t) for t in imgTiles]
-
-        # assign some background tiles to sprites instead
+        # assign as many image tiles as possible to sprites; the rest will be
+        # background tiles
         (bgTileIndexes, spriteData) = assign_tiles_to_sprites(
             imgTileIndexes, imgWidth, imgHeight
         )
 
-        # get distinct background tiles
-        distinctBgTiles = set(
-            distinctImgTiles[i]
-            for i in (set(bgTileIndexes) | set((BLANK_TILE_INDEX,)))
-        )
+        # get number of distinct background tiles
+        distinctBgTileCnt = len(set(bgTileIndexes) | set((BLANK_TILE_INDEX,)))
 
-        print(
-            "Image has {} distinct tiles. Need {} sprites and {} distinct "
-            "background tiles.".format(
-                len(distinctImgTiles), len(spriteData), len(distinctBgTiles)
-            )
-        )
-
-        if len(distinctBgTiles) <= MAX_BG_TILES:
+        if distinctBgTileCnt <= MAX_BG_TILES:
             break
         else:
             # replace a tile with one that will cause the smallest total error
             (from_, to_) = get_tile_to_replace(
-                distinctImgTiles, collections.Counter(imgTileIndexes),
-                minTileReplError
+                origDistinctImgTileCnt, origTileDistances,
+                collections.Counter(imgTileIndexes), distinctImgTilesLeft
             )
-            error = get_tile_distance(
-                distinctImgTiles[from_], distinctImgTiles[to_]
-            ) * imgTileIndexes.count(from_)
-            minTileReplError = max(minTileReplError, error)
-            print(f"Eliminating a distinct tile with an error of {error}.")
-            imgTiles = [
-                distinctImgTiles[to_ if i == from_ else i]
-                for i in imgTileIndexes
+            eliminatedTileCnt += 1
+            distinctImgTilesLeft.remove(from_)
+            imgTileIndexes = [
+                (to_ if i == from_ else i) for i in imgTileIndexes
             ]
 
-    # background: sort; convert from image-wide indexes to background indexes
-    distinctBgTiles = sorted(distinctBgTiles)
+    totalError = sum(
+        origTileDistances[t1*origDistinctImgTileCnt+t2]
+        for (t1, t2) in zip(origImgTileIndexes, imgTileIndexes)
+    )
+    # ratio=1 if the entire image changed between darkest and brightest
+    totalErrorRatio = (
+        totalError / (imgWidth * imgHeight * TILE_WIDTH * TILE_HEIGHT * 3)
+    )
+
+    print(
+        "{} tiles eliminated with a total error of {} units "
+        "({:.0f} parts per million).".format(
+            eliminatedTileCnt, totalError, totalErrorRatio * 10**6
+        )
+    )
+    print(
+        "Image has {} distinct tiles ({} sprites and {} distinct background "
+        "tiles).".format(
+            len(distinctImgTilesLeft), len(spriteData), distinctBgTileCnt
+        )
+    )
+
+    del distinctImgTilesLeft
+
+    # get data of distinct background tiles
+    distinctBgTiles = sorted(
+        origDistinctImgTiles[i]
+        for i in (set(bgTileIndexes) | set((BLANK_TILE_INDEX,)))
+    )
+    # convert background tile indexes from image-wide to background-wide
     bgTileIndexes = [
-        distinctBgTiles.index(distinctImgTiles[i]) for i in bgTileIndexes
+        distinctBgTiles.index(origDistinctImgTiles[i]) for i in bgTileIndexes
     ]
 
-    # sprites: sort by Y and X; index to tile pairs instead of tiles
-    spriteData.sort(key=lambda s: (s[1], s[0]))
-    distinctSprTileIndPairs = sorted(set(
-        (t1, t2) for (x, y, t1, t2) in spriteData
-    ))
+    # get data of distinct pairs of sprite tiles
+    distinctSprTileIndPairs = set((t1, t2) for (x, y, t1, t2) in spriteData)
+    distinctSprTilePairs = sorted(
+        (origDistinctImgTiles[t1], origDistinctImgTiles[t2])
+        for (t1, t2) in distinctSprTileIndPairs
+    )
+    del distinctSprTileIndPairs
+    # make sprites refer to tile pairs instead of individual tiles
     spriteData = [
-        (x, y, distinctSprTileIndPairs.index((t1, t2)))
-        for (x, y, t1, t2) in spriteData
+        (
+            x, y, distinctSprTilePairs.index(
+                (origDistinctImgTiles[t1], origDistinctImgTiles[t2])
+            )
+        ) for (x, y, t1, t2) in spriteData
     ]
+    # sort sprites by Y and X
+    spriteData.sort(key=lambda s: (s[1], s[0]))
 
     # write PRG data
     try:
@@ -362,26 +394,26 @@ def main():
         sys.exit(f"Error writing {PRG_OUT_FILE}")
     print(f"Wrote {PRG_OUT_FILE}")
 
-    # combine and pad tile data to MAX_BG_TILES+128 tiles
+    # combine and pad tile data to (MAX_BG_TILES + MAX_SPRITES * 2) tiles;
+    # a tile is a tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
     tiles = []
     tiles.extend(distinctBgTiles)
     tiles.extend(
         UNUSED_TILE for i in range(MAX_BG_TILES - len(distinctBgTiles))
     )
-    tiles.extend(itertools.chain.from_iterable(
-        (distinctImgTiles[t1], distinctImgTiles[t2])
-        for (t1, t2) in distinctSprTileIndPairs
-    ))
+    tiles.extend(itertools.chain.from_iterable(distinctSprTilePairs))
     tiles.extend(
         UNUSED_TILE
-        for i in range((MAX_SPRITES - len(distinctSprTileIndPairs)) * 2)
+        for i in range((MAX_SPRITES - len(distinctSprTilePairs)) * 2)
     )
 
     # write CHR data
     try:
         with open(CHR_OUT_FILE, "wb") as handle:
             handle.seek(0)
-            handle.write(bytes(get_chr_data(tiles)))
+            handle.write(bytes(itertools.chain.from_iterable(
+                encode_tile(t) for t in tiles
+            )))
     except OSError:
         sys.exit(f"Error writing {CHR_OUT_FILE}")
     print(f"Wrote {CHR_OUT_FILE}")

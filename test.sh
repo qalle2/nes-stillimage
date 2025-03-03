@@ -1,11 +1,23 @@
 rm -f test-out/*.nes
 
+python3 png2nesdata.py test-in/apogee-32x25.png 0f 12 15 28
+asm6 stillimage.asm   test-out/apogee-32x25.nes
+echo
+
 python3 png2nesdata.py test-in/blank-32x28.png
 asm6 stillimage.asm   test-out/blank-32x28.nes
 echo
 
+python3 png2nesdata.py test-in/doom-32x24.png 0f 16 26 30
+asm6 stillimage.asm   test-out/doom-32x24.nes
+echo
+
 python3 png2nesdata.py test-in/extracolour-26x6.png
 asm6 stillimage.asm   test-out/extracolour-26x6.nes
+echo
+
+python3 png2nesdata.py test-in/keen4-32x25.png
+asm6 stillimage.asm   test-out/keen4-32x25.nes
 echo
 
 python3 png2nesdata.py test-in/lena-16x24.png
@@ -46,6 +58,10 @@ echo
 
 python3 png2nesdata.py test-in/repeating-32x28.png
 asm6 stillimage.asm   test-out/repeating-32x28.nes
+echo
+
+python3 png2nesdata.py test-in/wolf-32x25.png 0f 12 24 36
+asm6 stillimage.asm   test-out/wolf-32x25.nes
 echo
 
 rm -f prg.bin chr.bin
