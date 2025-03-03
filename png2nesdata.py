@@ -15,8 +15,9 @@ INPUT_PALETTE = (
 )
 
 # special values to write
-BLANK_TILE    = 64 * (0,)  # filled with colour 0
-UNUSED_TILE   = 64 * (3,)  # filled with colour 3
+BLANK_TILE_INDEX = 0
+BLANK_TILE       = 64 * (0,)  # filled with colour 0
+UNUSED_TILE      = 64 * (3,)  # filled with colour 3
 
 # files to write (used by stillimage.asm)
 PRG_OUT_FILE = "prg.bin"
@@ -123,9 +124,8 @@ def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
     for i in range(64 - len(spriteData)):
         yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
 
-    # palette (8*4 bytes; only BG0 and SPR0 are used)
-    for i in range(8):
-        yield from outputPal
+    # palette (4 bytes)
+    yield from outputPal
 
     # horizontal and vertical background scroll
     yield from (xOffset, yOffset)
@@ -174,16 +174,17 @@ def parse_arguments():
     return (inputFile, outputPal)
 
 def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
-    # assign as many 1*2-tile pairs as possible to sprites instead;
-    # imgTiles:  list of image tiles starting from top left, with duplicates;
-    #            each tile is a tuple of 64 2-bit ints
+    # assign as many 1*2-tile pairs as possible to sprites instead
+    # imgTiles:  list of image tile indexes starting from top left, with
+    #            duplicates
     # imgWidth:  image width  in tiles
     # imgHeight: image height in tiles
-    # return:    (background_tiles, sprite_data)
+    # return:    (background_tile_indexes, sprite_data);
+    #            sprite_data is: (x, y, upper_sprite, lower_sprite);
+    #            x, y are in tiles;
+    #            upper_sprite, lower_sprite are image tile indexes
 
-    bgTiles = imgTiles.copy()
-
-    # (x, y, upperSpriteData, lowerSpriteData); unit of x and y: 1*2 tiles
+    bgTiles    = imgTiles.copy()
     spriteData = []
 
     if min(MAX_SPRITES_PER_SCANLINE, MAX_TOTAL_SPRITES) == 0:
@@ -198,8 +199,8 @@ def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
             upperTilePos =  sprY      * imgWidth + sprX
             lowerTilePos = (sprY + 1) * imgWidth + sprX
             if (
-                    bgTiles[upperTilePos] != BLANK_TILE
-                and bgTiles[lowerTilePos] != BLANK_TILE
+                    bgTiles[upperTilePos] != BLANK_TILE_INDEX
+                and bgTiles[lowerTilePos] != BLANK_TILE_INDEX
                 and bgTiles.count(bgTiles[upperTilePos]) == 1
                 and bgTiles.count(bgTiles[lowerTilePos]) == 1
             ):
@@ -207,11 +208,11 @@ def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
                 spriteData.append((
                     sprX, sprY, bgTiles[upperTilePos], bgTiles[lowerTilePos]
                 ))
-                bgTiles[upperTilePos] = BLANK_TILE
-                bgTiles[lowerTilePos] = BLANK_TILE
+                bgTiles[upperTilePos] = BLANK_TILE_INDEX
+                bgTiles[lowerTilePos] = BLANK_TILE_INDEX
                 spritesPerRow += 1
                 if (
-                    spritesPerRow == MAX_SPRITES_PER_SCANLINE
+                      spritesPerRow    == MAX_SPRITES_PER_SCANLINE
                     or len(spriteData) == MAX_TOTAL_SPRITES
                 ):
                     break
@@ -226,7 +227,7 @@ def get_tile_distance(tile1, tile2):
 
 def get_tile_to_replace(distinctTiles, tileCounts, minPossibleError=1):
     # which distinct tile to eliminate with the smallest error possible?
-    # slow;
+    # TODO: make this faster;
     # distinctTiles:    sorted distinct tiles in the image;
     #                   each tile is a tuple of 64 2-bit ints;
     # tileCounts:       {tile_index: count_in_image, ...}
@@ -276,21 +277,15 @@ def main():
         imgTileIndexes = [distinctImgTiles.index(t) for t in imgTiles]
 
         # assign some background tiles to sprites instead
-        (bgTiles, spriteData) = assign_tiles_to_sprites(
-            imgTiles, imgWidth, imgHeight
-        )
-        spriteData.sort(key=lambda s: (s[1], s[0]))  # by Y and X
-        distinctSpriteTilePairs = tuple(sorted(set(
-            (t1, t2) for (x, y, t1, t2) in spriteData
-        )))
-        # convert into (x, y, index_to_distinct_sprites)
-        spriteData = tuple(
-            (x, y, distinctSpriteTilePairs.index((t1, t2)))
-            for (x, y, t1, t2) in spriteData
+        (bgTileIndexes, spriteData) = assign_tiles_to_sprites(
+            imgTileIndexes, imgWidth, imgHeight
         )
 
         # get distinct background tiles
-        distinctBgTiles = tuple(sorted(set(bgTiles) | set((BLANK_TILE,))))
+        distinctBgTiles = set(
+            distinctImgTiles[i]
+            for i in (set(bgTileIndexes) | set((BLANK_TILE_INDEX,)))
+        )
 
         print(
             "Image has {} distinct tiles. Need {} sprites and {} distinct "
@@ -317,26 +312,43 @@ def main():
                 for i in imgTileIndexes
             ]
 
-    # get name table data (indexes to distinct background tiles)
-    ntData = tuple(distinctBgTiles.index(t) for t in bgTiles)
+    # background: sort; convert from image-wide indexes to background indexes
+    distinctBgTiles = sorted(distinctBgTiles)
+    bgTileIndexes = [
+        distinctBgTiles.index(distinctImgTiles[i]) for i in bgTileIndexes
+    ]
+
+    # sprites: sort by Y and X; index to tile pairs instead of tiles
+    spriteData.sort(key=lambda s: (s[1], s[0]))  # by Y and X
+    distinctSprTileIndPairs = sorted(set(
+        (t1, t2) for (x, y, t1, t2) in spriteData
+    ))
+    spriteData = [
+        (x, y, distinctSprTileIndPairs.index((t1, t2)))
+        for (x, y, t1, t2) in spriteData
+    ]
 
     # write PRG data
     try:
         with open(PRG_OUT_FILE, "wb") as handle:
             handle.seek(0)
             handle.write(bytes(get_prg_data(
-                ntData, spriteData, outputPal, imgWidth, imgHeight
+                bgTileIndexes, spriteData, outputPal, imgWidth, imgHeight
             )))
     except OSError:
         sys.exit(f"Error writing {PRG_OUT_FILE}")
     print(f"Wrote {PRG_OUT_FILE}")
 
     # combine and pad tile data to 256+128 tiles
-    tiles = (
-        distinctBgTiles
-        + (256 - len(distinctBgTiles)) * (UNUSED_TILE,)
-        + tuple(itertools.chain.from_iterable(distinctSpriteTilePairs))
-        + (64 - len(distinctSpriteTilePairs)) * 2 * (UNUSED_TILE,)
+    tiles = []
+    tiles.extend(distinctBgTiles)
+    tiles.extend(UNUSED_TILE for i in range(256 - len(distinctBgTiles)))
+    tiles.extend(itertools.chain.from_iterable(
+        (distinctImgTiles[t1], distinctImgTiles[t2])
+        for (t1, t2) in distinctSprTileIndPairs
+    ))
+    tiles.extend(
+        UNUSED_TILE for i in range((64 - len(distinctSprTileIndPairs)) * 2)
     )
 
     # write CHR data
