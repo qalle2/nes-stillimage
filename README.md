@@ -16,15 +16,18 @@ Two programs that let you convert an image (e.g. PNG) into an NES ROM that shows
 ## png2nesdata.py
 A Python program that converts an image (e.g. PNG) into NES graphics data. Requires the [Pillow](https://python-pillow.org) module.
 
-Command line arguments: *inputFile outputColour0 outputColour1 outputColour2 outputColour3*
-* *inputFile*: the image file to read:
+Command line argument: *inputFile*
+
+*inputFile* is the image file to read:
   * the width must be 8&ndash;256 pixels and a multiple of 8 pixels
   * the height must be 8&ndash;224 pixels and a multiple of 8 pixels
-  * may only contain these colours (hexadecimal RRGGBB): `000000`, `555555`, `aaaaaa`, `ffffff`
+  * may not contain more than 4 distinct colours
+  * each colour must correspond to a distinct NES colour (otherwise try making the colours more distinct from each other)
   * if the image is too complex (has too many distinct tiles), it will be automatically simplified which reduces the quality
-* *outputColour0*&hellip;*outputColour3*: the output palette:
-  * each colour is an NES colour index in hexadecimal (`00` to `3f`).
-  * optional; the default is `0f 00 10 30` (greyscale)
+
+The program uses the NES palette `FCEUX.pal` from FCEUX. It is reproduced below for your convenience. Colours not used by the program have been crossed over in grey.
+
+![NES palette from FCEUX with some colours crossed over](palette.png)
 
 The program writes `prg.bin` and `chr.bin`. (They will be overwritten if they already exist.)
 

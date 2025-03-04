@@ -19,16 +19,6 @@ MAX_SPRITES_PER_SCANLINE =   8  # maximum number of sprites per scanline
 
 # the rest of the "constants" can be changed
 
-# palette of input image (red, green, blue)
-INPUT_PALETTE = (
-    (0x00, 0x00, 0x00),
-    (0x55, 0x55, 0x55),
-    (0xaa, 0xaa, 0xaa),
-    (0xff, 0xff, 0xff),
-)
-# default output palette (four NES colour indexes)
-DEFAULT_OUT_PALETTE = (0x0f, 0x00, 0x10, 0x30)
-
 # files to write (used by stillimage.asm)
 PRG_OUT_FILE = "prg.bin"
 CHR_OUT_FILE = "chr.bin"
@@ -42,33 +32,99 @@ MAX_SPRITES_TO_USE              = MAX_SPRITES
 BLANK_TILE_INDEX = 0
 BLANK_TILE  = TILE_WIDTH * TILE_HEIGHT * (0,)  # filled with colour 0
 UNUSED_TILE = TILE_WIDTH * TILE_HEIGHT * (3,)  # filled with colour 3
+UNUSED_COLOUR = 0x00  # NES colour index
+
+# NES master palette
+# key=index, value=(red, green, blue); source: FCEUX (fceux.pal)
+# colours omitted (hexadecimal): 0d-0e, 1d-20, 2d-2f, 3d-3f
+NES_PALETTE = {
+    0x00: (0x74, 0x74, 0x74),  # dark grey
+    0x01: (0x24, 0x18, 0x8c),  # x1 = cyan/blue
+    0x02: (0x00, 0x00, 0xa8),  # x2 = blue
+    0x03: (0x44, 0x00, 0x9c),  # x3 = purple
+    0x04: (0x8c, 0x00, 0x74),  # x4 = magenta
+    0x05: (0xa8, 0x00, 0x10),  # x5 = magenta/red
+    0x06: (0xa4, 0x00, 0x00),  # x6 = red/orange
+    0x07: (0x7c, 0x08, 0x00),  # x7 = gold
+    0x08: (0x40, 0x2c, 0x00),  # x8 = yellow
+    0x09: (0x00, 0x44, 0x00),  # x9 = yellow/green
+    0x0a: (0x00, 0x50, 0x00),  # xA = green
+    0x0b: (0x00, 0x3c, 0x14),  # xB = green/cyan
+    0x0c: (0x18, 0x3c, 0x5c),  # xC = cyan
+    0x0f: (0x00, 0x00, 0x00),  # black
+    0x10: (0xbc, 0xbc, 0xbc),  # light grey
+    0x11: (0x00, 0x70, 0xec),
+    0x12: (0x20, 0x38, 0xec),
+    0x13: (0x80, 0x00, 0xf0),
+    0x14: (0xbc, 0x00, 0xbc),
+    0x15: (0xe4, 0x00, 0x58),
+    0x16: (0xd8, 0x28, 0x00),
+    0x17: (0xc8, 0x4c, 0x0c),
+    0x18: (0x88, 0x70, 0x00),
+    0x19: (0x00, 0x94, 0x00),
+    0x1a: (0x00, 0xa8, 0x00),
+    0x1b: (0x00, 0x90, 0x38),
+    0x1c: (0x00, 0x80, 0x88),
+    0x21: (0x3c, 0xbc, 0xfc),
+    0x22: (0x5c, 0x94, 0xfc),
+    0x23: (0xcc, 0x88, 0xfc),
+    0x24: (0xf4, 0x78, 0xfc),
+    0x25: (0xfc, 0x74, 0xb4),
+    0x26: (0xfc, 0x74, 0x60),
+    0x27: (0xfc, 0x98, 0x38),
+    0x28: (0xf0, 0xbc, 0x3c),
+    0x29: (0x80, 0xd0, 0x10),
+    0x2a: (0x4c, 0xdc, 0x48),
+    0x2b: (0x58, 0xf8, 0x98),
+    0x2c: (0x00, 0xe8, 0xd8),
+    0x30: (0xfc, 0xfc, 0xfc),  # white
+    0x31: (0xa8, 0xe4, 0xfc),
+    0x32: (0xc4, 0xd4, 0xfc),
+    0x33: (0xd4, 0xc8, 0xfc),
+    0x34: (0xfc, 0xc4, 0xfc),
+    0x35: (0xfc, 0xc4, 0xd8),
+    0x36: (0xfc, 0xbc, 0xb0),
+    0x37: (0xfc, 0xd8, 0xa8),
+    0x38: (0xfc, 0xe4, 0xa0),
+    0x39: (0xe0, 0xfc, 0xa0),
+    0x3a: (0xa8, 0xf0, 0xbc),
+    0x3b: (0xb0, 0xfc, 0xcc),
+    0x3c: (0x9c, 0xfc, 0xf0),
+}
 
 # --- functions except main ---------------------------------------------------
 
 def parse_arguments():
     # parse command line arguments;
-    # return (input_file, output_palette)
+    # return: input_file
 
-    if len(sys.argv) not in (2, 6):
+    if len(sys.argv) != 2:
         sys.exit("Converts an image into NES graphics data. See README.md.")
 
     inputFile = sys.argv[1]
-    if len(sys.argv) == 6:
-        try:
-            outputPal = tuple(int(c, 16) for c in sys.argv[2:6])
-        except ValueError:
-            sys.exit("Output colours must be hexadecimal integers.")
-    else:
-        outputPal = DEFAULT_OUT_PALETTE
-
-    if min(outputPal) < 0 or max(outputPal) > 0x3f:
-        sys.exit("Output colours must be 00-3f.")
     if not os.path.isfile(inputFile):
         sys.exit("Input file not found.")
 
-    return (inputFile, outputPal)
+    return inputFile
+
+def get_colour_diff(rgb1, rgb2):
+    # get difference (0-768) of two colours (red, green, blue)
+    return sum(abs(comp[0] - comp[1]) for comp in zip(rgb1, rgb2))
+
+def get_closest_nes_colour(rgb):
+    # rgb:    colour (red, green, blue)
+    # return: closest NES colour index
+    minDiff = -1
+    for nesColour in sorted(NES_PALETTE):
+        diff = get_colour_diff(NES_PALETTE[nesColour], rgb)
+        if minDiff == -1 or diff < minDiff:
+            minDiff = diff
+            bestNesColour = nesColour
+    return bestNesColour
 
 def get_colour_conv_table(image):
+    # get a dict that converts original colour indexes into NES colour indexes
+
     # get palette in [R, G, B, ...] format
     imgPal = image.getpalette()
     # convert palette into [(R, G, B), ...] format
@@ -76,37 +132,27 @@ def get_colour_conv_table(image):
     # get colours that are actually used, in [(R, G, B), ...] format
     coloursUsed = [imgPal[c[1]] for c in image.getcolors()]
 
-    if not set(coloursUsed).issubset(set(INPUT_PALETTE)):
-        sys.exit("Image contains unsupported colours.")
-
-    # create a dict that converts original colour indexes into INPUT_PALETTE
-    return dict(
-        (imgPal.index(c), INPUT_PALETTE.index(c)) for c in coloursUsed
+    colourConvTable = dict(
+        (imgPal.index(c), get_closest_nes_colour(c)) for c in coloursUsed
     )
+    if len(set(colourConvTable.values())) < len(colourConvTable):
+        sys.exit(
+            "Error: two or more image colours correspond to the same NES "
+            "colour. Try making the image colours more distinct."
+        )
+    return colourConvTable
 
-def get_tiles(image):
+def nes_colour_to_brightness(colour):
+    (red, green, blue) = NES_PALETTE[colour]
+    return red * 2 + green * 3 + blue
+
+def get_tiles(image, imgColourIndexToNesIndex):
     # generate each tile as a tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
 
-    if not 8 <= image.width <= 256 or image.width % 8 > 0:
-        sys.exit("Image width must be 8-256 and a multiple of 8.")
-    if not 8 <= image.height <= 224 or image.height % 8 > 0:
-        sys.exit("Image height must be 8-224 and a multiple of 8.")
-    if image.getcolors(4) is None:
-        sys.exit("The image must have 4 colours or less.")
-
-    # convert into indexed colour
-    if image.mode != "P":
-        image = image.convert(
-            "P", dither=Image.Dither.NONE, palette=Image.Palette.ADAPTIVE
-        )
-
-    colourConvTable = get_colour_conv_table(image)
-
-    # generate tiles
     for y in range(0, image.height, TILE_HEIGHT):
         for x in range(0, image.width, TILE_WIDTH):
             yield tuple(
-                colourConvTable[c]
+                imgColourIndexToNesIndex[c]
                 for c in image.crop(
                     (x, y, x + TILE_WIDTH, y + TILE_HEIGHT)
                 ).getdata()
@@ -287,11 +333,11 @@ def encode_at_data(atData):
                 | (atData[srcInd+16+1] << 6)
             )
 
-def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
+def get_prg_data(ntData, spriteData, nesPalette, imgWidth, imgHeight):
     # generate each byte of PRG data;
     # ntData:     indexes to distinct background tiles
     # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each
-    # outputPal:  a tuple of 4 ints
+    # nesPalette: a tuple of 4 ints
     # imgWidth:   image width  in tiles
     # imgHeight:  image height in tiles
 
@@ -322,7 +368,7 @@ def get_prg_data(ntData, spriteData, outputPal, imgWidth, imgHeight):
         yield from (0xff, 0xff, 0xff, 0xff)  # unused (hide)
 
     # palette (4 bytes)
-    yield from outputPal
+    yield from nesPalette
 
     # horizontal and vertical background scroll
     yield from (xOffset, yOffset)
@@ -341,18 +387,53 @@ def encode_tile(tile):
 
 def main():
     startTime = time.time()
-    (inputFile, outputPal) = parse_arguments()
+    inputFile = parse_arguments()
 
     # read tiles
     try:
         with open(inputFile, "rb") as handle:
             handle.seek(0)
             image = Image.open(handle)
-            imgTiles = list(get_tiles(image))
+
+            # validate image
+            if not 8 <= image.width <= 256 or image.width % 8 > 0:
+                sys.exit("Image width must be 8-256 and a multiple of 8.")
+            if not 8 <= image.height <= 224 or image.height % 8 > 0:
+                sys.exit("Image height must be 8-224 and a multiple of 8.")
+            if image.getcolors(4) is None:
+                sys.exit("The image must have 4 colours or less.")
+
+            # convert image into indexed colour
+            if image.mode != "P":
+                image = image.convert(
+                    "P", dither=Image.Dither.NONE, palette=Image.Palette.ADAPTIVE
+                )
+
+            # get a dict that converts original colour indexes into NES colour
+            # indexes
+            imgColourIndexToNesIndex = get_colour_conv_table(image)
+
+            # create output palette (NES colour indexes) sorted by brightness
+            # and pad it to 4 colours
+            nesPalette = sorted(imgColourIndexToNesIndex.values())
+            nesPalette.sort(key=lambda c: nes_colour_to_brightness(c))
+            nesPalette.extend((4 - len(nesPalette)) * (UNUSED_COLOUR,))
+
+            # make conversion dict use the correct output palette
+            imgColourIndexToNesIndex = dict(
+                (i, nesPalette.index(imgColourIndexToNesIndex[i]))
+                for i in imgColourIndexToNesIndex
+            )
+
+            imgTiles = list(get_tiles(image, imgColourIndexToNesIndex))
             imgWidth  = image.width  // TILE_WIDTH
             imgHeight = image.height // TILE_HEIGHT
     except OSError:
         sys.exit("Error reading input file.")
+
+    print("NES palette to use for {}: {}".format(
+        os.path.basename(inputFile), " ".join(f"0x{c:02x}" for c in nesPalette)
+    ))
 
     # pixels of each originally distinct tile;
     # does not change during elimination of tiles
@@ -363,9 +444,7 @@ def main():
     # used for calculating total error
     origImgTileIndexes = [origDistinctImgTiles.index(t) for t in imgTiles]
 
-    print("{} has {} distinct tiles.".format(
-        os.path.basename(inputFile), len(origDistinctImgTiles)
-    ))
+    print(f"The image has {len(origDistinctImgTiles)} distinct tiles.")
 
     # eliminate distinct tiles if necessary
     imgTileIndexes = eliminate_tiles(
@@ -444,7 +523,7 @@ def main():
         with open(PRG_OUT_FILE, "wb") as handle:
             handle.seek(0)
             handle.write(bytes(get_prg_data(
-                bgTileIndexes, spriteData, outputPal, imgWidth, imgHeight
+                bgTileIndexes, spriteData, nesPalette, imgWidth, imgHeight
             )))
     except OSError:
         sys.exit(f"Error writing {PRG_OUT_FILE}")
