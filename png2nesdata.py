@@ -17,23 +17,6 @@ MAX_BG_TILES             = 256  # maximum number of distinct background tiles
 MAX_SPRITES              =  64  # maximum number of sprites
 MAX_SPRITES_PER_SCANLINE =   8  # maximum number of sprites per scanline
 
-# the rest of the "constants" can be changed
-
-# files to write (used by stillimage.asm)
-PRG_OUT_FILE = "prg.bin"
-CHR_OUT_FILE = "chr.bin"
-
-# only decrease these if you can't let this program have all the background
-# tiles and sprites
-MAX_BG_TILES_TO_USE             = MAX_BG_TILES
-MAX_SPRITES_PER_SCANLINE_TO_USE = MAX_SPRITES_PER_SCANLINE
-MAX_SPRITES_TO_USE              = MAX_SPRITES
-
-BLANK_TILE_INDEX = 0
-BLANK_TILE  = TILE_WIDTH * TILE_HEIGHT * (0,)  # filled with colour 0
-UNUSED_TILE = TILE_WIDTH * TILE_HEIGHT * (3,)  # filled with colour 3
-UNUSED_COLOUR = 0x00  # NES colour index
-
 # NES master palette
 # key=index, value=(red, green, blue); source: FCEUX (fceux.pal)
 # colours omitted (hexadecimal): 0d-0e, 1d-20, 2d-2f, 3d-3f
@@ -92,20 +75,16 @@ NES_PALETTE = {
     0x3c: (0x9c, 0xfc, 0xf0),
 }
 
-# --- functions except main ---------------------------------------------------
+# files to write (used by stillimage.asm)
+PRG_OUT_FILE = "prg.bin"
+CHR_OUT_FILE = "chr.bin"
 
-def parse_arguments():
-    # parse command line arguments;
-    # return: input_file
+BLANK_TILE_INDEX = 0
+BLANK_TILE  = TILE_WIDTH * TILE_HEIGHT * (0,)  # filled with colour 0
+UNUSED_TILE = TILE_WIDTH * TILE_HEIGHT * (3,)  # filled with colour 3
+UNUSED_COLOUR = 0x00  # NES colour index
 
-    if len(sys.argv) != 2:
-        sys.exit("Converts an image into NES graphics data. See README.md.")
-
-    inputFile = sys.argv[1]
-    if not os.path.isfile(inputFile):
-        sys.exit("Input file not found.")
-
-    return inputFile
+# --- input file reading ------------------------------------------------------
 
 def get_colour_diff(rgb1, rgb2):
     # get difference (0-768) of two colours (red, green, blue)
@@ -132,31 +111,73 @@ def get_colour_conv_table(image):
     # get colours that are actually used, in [(R, G, B), ...] format
     coloursUsed = [imgPal[c[1]] for c in image.getcolors()]
 
-    colourConvTable = dict(
+    return dict(
         (imgPal.index(c), get_closest_nes_colour(c)) for c in coloursUsed
     )
-    if len(set(colourConvTable.values())) < len(colourConvTable):
-        sys.exit(
-            "Error: two or more image colours correspond to the same NES "
-            "colour. Try making the image colours more distinct."
-        )
-    return colourConvTable
 
 def nes_colour_to_brightness(colour):
     (red, green, blue) = NES_PALETTE[colour]
     return red * 2 + green * 3 + blue
 
-def get_tiles(image, imgColourIndexToNesIndex):
+def get_tiles(image):
     # generate each tile as a tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
 
     for y in range(0, image.height, TILE_HEIGHT):
         for x in range(0, image.width, TILE_WIDTH):
             yield tuple(
-                imgColourIndexToNesIndex[c]
-                for c in image.crop(
-                    (x, y, x + TILE_WIDTH, y + TILE_HEIGHT)
-                ).getdata()
+                image.crop((x, y, x + TILE_WIDTH, y + TILE_HEIGHT)).getdata()
             )
+
+def read_image(image):
+    # return a tuple with:
+    #     image_tiles (pixels of each tile with duplicates;
+    #                 pixels are indexes to nes_palette)
+    #     nes_palette (4 NES colour indexes)
+    #     image_width_in_tiles
+
+    # validate image
+    if not 8 <= image.width <= 256 or image.width % 8 > 0:
+        sys.exit("Image width must be 8-256 and a multiple of 8.")
+    if not 8 <= image.height <= 224 or image.height % 8 > 0:
+        sys.exit("Image height must be 8-224 and a multiple of 8.")
+    if image.getcolors(4) is None:
+        sys.exit("The image must have 4 colours or less.")
+
+    # convert image into indexed colour
+    if image.mode != "P":
+        image = image.convert(
+            "P", dither=Image.Dither.NONE, palette=Image.Palette.ADAPTIVE
+        )
+
+    # {original_colour_index: closest_nes_colour_index, ...}
+    imgColourToNesColour = get_colour_conv_table(image)
+    if len(set(imgColourToNesColour.values())) < len(imgColourToNesColour):
+        sys.exit(
+            "Error: two or more image colours correspond to the same NES "
+            "colour. Try making the image colours more distinct."
+        )
+
+    # create output palette (NES colour indexes) sorted by brightness
+    # and pad it to 4 colours
+    nesPalette = sorted(imgColourToNesColour.values())
+    nesPalette.sort(key=lambda c: nes_colour_to_brightness(c))
+    nesPalette.extend((4 - len(nesPalette)) * (UNUSED_COLOUR,))
+
+    # {original_colour_index: index_to_nesPalette, ...}
+    imgColourToNesColour = dict(
+        (i, nesPalette.index(imgColourToNesColour[i]))
+        for i in imgColourToNesColour
+    )
+
+    # get pixels of tiles and convert their colours to indexes to nesPalette
+    imgTiles = [
+        tuple(imgColourToNesColour[c] for c in t)
+        for t in get_tiles(image)
+    ]
+
+    return (imgTiles, nesPalette, image.width // TILE_WIDTH)
+
+# --- graphics data processing ------------------------------------------------
 
 def get_tile_distance(tile1, tile2):
     # tile1, tile2: tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
@@ -176,9 +197,6 @@ def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
 
     bgTiles    = imgTiles.copy()
     spriteData = []
-
-    if min(MAX_SPRITES_PER_SCANLINE_TO_USE, MAX_SPRITES_TO_USE) == 0:
-        return (bgTiles, spriteData)
 
     # replace 1*2-tile pairs where both tiles are non-blank and unique within
     # the image; this way each sprite saves 2 background tiles;
@@ -202,11 +220,11 @@ def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
                 bgTiles[lowerTilePos] = BLANK_TILE_INDEX
                 spritesPerRow += 1
                 if (
-                      spritesPerRow    == MAX_SPRITES_PER_SCANLINE_TO_USE
-                    or len(spriteData) == MAX_SPRITES_TO_USE
+                       spritesPerRow   == MAX_SPRITES_PER_SCANLINE
+                    or len(spriteData) == MAX_SPRITES
                 ):
                     break
-        if len(spriteData) == MAX_SPRITES_TO_USE:
+        if len(spriteData) == MAX_SPRITES:
             break
 
     return (bgTiles, spriteData)
@@ -291,7 +309,7 @@ def eliminate_tiles(origDistinctImgTiles, origImgTileIndexes, imgWidth):
         # get number of distinct background tiles
         distinctBgTileCnt = len(set(bgTileIndexes) | set((BLANK_TILE_INDEX,)))
 
-        if distinctBgTileCnt <= MAX_BG_TILES_TO_USE:
+        if distinctBgTileCnt <= MAX_BG_TILES:
             break
         else:
             # replace a tile with one that will cause the smallest total error
@@ -315,6 +333,8 @@ def eliminate_tiles(origDistinctImgTiles, origImgTileIndexes, imgWidth):
 
     return imgTileIndexes
 
+# --- output data encoding ----------------------------------------------------
+
 def encode_at_data(atData):
     # encode attribute table data
     # atData:   a list of 240 (16*15) 2-bit ints
@@ -333,13 +353,14 @@ def encode_at_data(atData):
                 | (atData[srcInd+16+1] << 6)
             )
 
-def get_prg_data(ntData, spriteData, nesPalette, imgWidth, imgHeight):
+def get_prg_data(ntData, spriteData, nesPalette, imgWidth):
     # generate each byte of PRG data;
     # ntData:     indexes to distinct background tiles
     # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each
     # nesPalette: a tuple of 4 ints
-    # imgWidth:   image width  in tiles
-    # imgHeight:  image height in tiles
+    # imgWidth:   image width in tiles
+
+    imgHeight = len(ntData) // imgWidth
 
     # name table; (NT_WIDTH * NT_HEIGHT) bytes;
     # the image itself is at bottom right
@@ -373,6 +394,18 @@ def get_prg_data(ntData, spriteData, nesPalette, imgWidth, imgHeight):
     # horizontal and vertical background scroll
     yield from (xOffset, yOffset)
 
+def get_output_tiles(bgTiles, sprTilePairs):
+    # bgTiles:      list of distinct           background tiles
+    # sprTilePairs: list of distinct tuples of sprite     tiles
+    # generate:     (MAX_BG_TILES + MAX_SPRITES * 2) tiles
+    # (a tile is a tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints)
+    yield from bgTiles
+    yield from (UNUSED_TILE for i in range(MAX_BG_TILES - len(bgTiles)))
+    yield from itertools.chain.from_iterable(sprTilePairs)
+    yield from (
+        UNUSED_TILE for i in range((MAX_SPRITES - len(sprTilePairs)) * 2)
+    )
+
 def encode_tile(tile):
     # tile: a tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
     # generate one integer with TILE_WIDTH bits per call
@@ -387,49 +420,27 @@ def encode_tile(tile):
 
 def main():
     startTime = time.time()
-    inputFile = parse_arguments()
 
-    # read tiles
+    # parse command line argument
+    if len(sys.argv) != 2:
+        sys.exit(
+            "Converts an image into NES graphics data. Argument: input file. "
+            "See README.md for details."
+        )
+    inputFile = sys.argv[1]
+    if not os.path.isfile(inputFile):
+        sys.exit("Input file not found.")
+
+    # read input file
     try:
         with open(inputFile, "rb") as handle:
             handle.seek(0)
             image = Image.open(handle)
-
-            # validate image
-            if not 8 <= image.width <= 256 or image.width % 8 > 0:
-                sys.exit("Image width must be 8-256 and a multiple of 8.")
-            if not 8 <= image.height <= 224 or image.height % 8 > 0:
-                sys.exit("Image height must be 8-224 and a multiple of 8.")
-            if image.getcolors(4) is None:
-                sys.exit("The image must have 4 colours or less.")
-
-            # convert image into indexed colour
-            if image.mode != "P":
-                image = image.convert(
-                    "P", dither=Image.Dither.NONE, palette=Image.Palette.ADAPTIVE
-                )
-
-            # get a dict that converts original colour indexes into NES colour
-            # indexes
-            imgColourIndexToNesIndex = get_colour_conv_table(image)
-
-            # create output palette (NES colour indexes) sorted by brightness
-            # and pad it to 4 colours
-            nesPalette = sorted(imgColourIndexToNesIndex.values())
-            nesPalette.sort(key=lambda c: nes_colour_to_brightness(c))
-            nesPalette.extend((4 - len(nesPalette)) * (UNUSED_COLOUR,))
-
-            # make conversion dict use the correct output palette
-            imgColourIndexToNesIndex = dict(
-                (i, nesPalette.index(imgColourIndexToNesIndex[i]))
-                for i in imgColourIndexToNesIndex
-            )
-
-            imgTiles = list(get_tiles(image, imgColourIndexToNesIndex))
-            imgWidth  = image.width  // TILE_WIDTH
-            imgHeight = image.height // TILE_HEIGHT
+            (imgTiles, nesPalette, imgWidth) = read_image(image)
     except OSError:
         sys.exit("Error reading input file.")
+
+    imgHeight = len(imgTiles) // imgWidth
 
     print("NES palette to use for {}: {}".format(
         os.path.basename(inputFile), " ".join(f"0x{c:02x}" for c in nesPalette)
@@ -458,8 +469,8 @@ def main():
 
     distinctBgTileIndexes = set(bgTileIndexes) | set((BLANK_TILE_INDEX,))
     if (
-           len(distinctBgTileIndexes) > MAX_BG_TILES_TO_USE
-        or len(spriteData)            > MAX_SPRITES_TO_USE
+           len(distinctBgTileIndexes) > MAX_BG_TILES
+        or len(spriteData)            > MAX_SPRITES
     ):
         sys.exit("Error: a crosscheck failed (this should never happen).")
 
@@ -468,6 +479,7 @@ def main():
         get_tile_distance(origDistinctImgTiles[t1], origDistinctImgTiles[t2])
         for (t1, t2) in zip(origImgTileIndexes, imgTileIndexes)
     )
+    del origImgTileIndexes
     if totalError > 0:
         # an error of 100% means the whole image changed between the darkest
         # and the lightest colour
@@ -495,6 +507,7 @@ def main():
     bgTileIndexes = [
         distinctBgTiles.index(origDistinctImgTiles[i]) for i in bgTileIndexes
     ]
+    del distinctBgTileIndexes
 
     # get pixels of distinct pairs of sprite tiles;
     # primary sort by number of colours, secondary sort by pixels
@@ -523,30 +536,19 @@ def main():
         with open(PRG_OUT_FILE, "wb") as handle:
             handle.seek(0)
             handle.write(bytes(get_prg_data(
-                bgTileIndexes, spriteData, nesPalette, imgWidth, imgHeight
+                bgTileIndexes, spriteData, nesPalette, imgWidth
             )))
     except OSError:
         sys.exit(f"Error writing {PRG_OUT_FILE}")
-
-    # combine and pad tile data to (MAX_BG_TILES + MAX_SPRITES * 2) tiles;
-    # a tile is a tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
-    tiles = []
-    tiles.extend(distinctBgTiles)
-    tiles.extend(
-        UNUSED_TILE for i in range(MAX_BG_TILES - len(distinctBgTiles))
-    )
-    tiles.extend(itertools.chain.from_iterable(distinctSprTilePairs))
-    tiles.extend(
-        UNUSED_TILE
-        for i in range((MAX_SPRITES - len(distinctSprTilePairs)) * 2)
-    )
 
     # write CHR data
     try:
         with open(CHR_OUT_FILE, "wb") as handle:
             handle.seek(0)
             handle.write(bytes(itertools.chain.from_iterable(
-                encode_tile(t) for t in tiles
+                encode_tile(t) for t in get_output_tiles(
+                    distinctBgTiles, distinctSprTilePairs
+                )
             )))
     except OSError:
         sys.exit(f"Error writing {CHR_OUT_FILE}")
