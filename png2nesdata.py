@@ -363,8 +363,8 @@ def main():
     # used for calculating total error
     origImgTileIndexes = [origDistinctImgTiles.index(t) for t in imgTiles]
 
-    print("Image has {} distinct tiles. Eliminating tiles if needed.".format(
-        len(origDistinctImgTiles)
+    print("{} has {} distinct tiles.".format(
+        os.path.basename(inputFile), len(origDistinctImgTiles)
     ))
 
     # eliminate distinct tiles if necessary
@@ -382,47 +382,49 @@ def main():
            len(distinctBgTileIndexes) > MAX_BG_TILES_TO_USE
         or len(spriteData)            > MAX_SPRITES_TO_USE
     ):
-        sys.exit("Crosscheck failed (this should never happen).")
+        sys.exit("Error: a crosscheck failed (this should never happen).")
 
+    # get the error caused by eliminating tiles
     totalError = sum(
         get_tile_distance(origDistinctImgTiles[t1], origDistinctImgTiles[t2])
         for (t1, t2) in zip(origImgTileIndexes, imgTileIndexes)
     )
-    # the error ratio will be 1 if the entire image changed between the darkest
-    # and the lightest colour
-    totalErrorRatio = (
-        totalError / (imgWidth * imgHeight * TILE_WIDTH * TILE_HEIGHT * 3)
-    )
+    if totalError > 0:
+        # an error of 100% means the whole image changed between the darkest
+        # and the lightest colour
+        print(
+            "The number of distinct tiles was reduced to {}, making the image "
+            "quality {:.2f}% worse.".format(
+                len(set(imgTileIndexes) | set((BLANK_TILE_INDEX,))),
+                totalError /
+                (imgWidth * imgHeight * TILE_WIDTH * TILE_HEIGHT * 3) * 100
+            )
+        )
 
     print(
-        "Total error from elimination of tiles: {} units ({:.1f}%).".format(
-            totalError, totalErrorRatio * 100
-        )
-    )
-    print(
-        "Image has {} distinct tiles ({} sprites and {} distinct background "
-        "tiles).".format(
-            len(set(imgTileIndexes) | set((BLANK_TILE_INDEX,))),
-            len(spriteData),
-            len(distinctBgTileIndexes)
-        )
+        "The NES program will have {} distinct background tiles and {} "
+        "sprites.".format(len(distinctBgTileIndexes), len(spriteData))
     )
 
-    # get pixels of distinct background tiles
+    # get pixels of distinct background tiles;
+    # primary sort by number of colours, secondary sort by pixels
     distinctBgTiles = sorted(
         origDistinctImgTiles[i] for i in distinctBgTileIndexes
     )
+    distinctBgTiles.sort(key=lambda t: len(set(t)))
     # convert background tile indexes from image-wide to background-wide
     bgTileIndexes = [
         distinctBgTiles.index(origDistinctImgTiles[i]) for i in bgTileIndexes
     ]
 
-    # get pixels of distinct pairs of sprite tiles
+    # get pixels of distinct pairs of sprite tiles;
+    # primary sort by number of colours, secondary sort by pixels
     distinctSprTileIndPairs = set((t1, t2) for (x, y, t1, t2) in spriteData)
     distinctSprTilePairs = sorted(
         (origDistinctImgTiles[t1], origDistinctImgTiles[t2])
         for (t1, t2) in distinctSprTileIndPairs
     )
+    distinctSprTilePairs.sort(key=lambda p: len(set(p[0]) | set(p[1])))
     del distinctSprTileIndPairs
     # make sprites refer to tile pairs instead of individual tiles
     spriteData = [
@@ -470,7 +472,7 @@ def main():
     except OSError:
         sys.exit(f"Error writing {CHR_OUT_FILE}")
 
-    print("Wrote {} and {} in {:.1f} seconds.".format(
+    print("Wrote {} and {}. Total time: {:.1f} seconds.".format(
         PRG_OUT_FILE, CHR_OUT_FILE, time.time() - startTime
     ))
 
