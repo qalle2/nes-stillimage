@@ -29,16 +29,16 @@ Command line arguments: *inputFile outputColour0 outputColour1 outputColour2 out
 The program writes `prg.bin` and `chr.bin`. (They will be overwritten if they already exist.)
 
 ## stillimage.asm
-An NES program that displays the graphics data from `prg.bin` and `chr.bin`. The files must be generated beforehand by `png2nesdata.py`. Assembles with [ASM6](https://www.romhacking.net/utilities/674/).
+An NES program that displays the graphics data from `prg.bin` and `chr.bin`. The files must be generated beforehand by `png2nesdata.py`.
 
-To assemble, run `asm6 stillimage.asm output.nes`
+Assembles with [ASM6](https://www.romhacking.net/utilities/674/). To assemble, run `asm6 stillimage.asm out.nes`
 
 ## Technical info on the NES program
 * PRG ROM: 16 KiB (only 2 KiB is actually used)
-* CHR ROM: 8 KiB
+* CHR ROM: 8 KiB (only 6 KiB is actually used)
 * mapper: NROM (iNES mapper number 0)
 * name table mirroring: vertical
-* no raster effects
+* no raster effects (e.g. changing name table in HBlank)
 * sprite size: 8&times;16 pixels
 * this data is copied from files `prg.bin` and `chr.bin`:
   * name table

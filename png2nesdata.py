@@ -33,8 +33,9 @@ DEFAULT_OUT_PALETTE = (0x0f, 0x00, 0x10, 0x30)
 PRG_OUT_FILE = "prg.bin"
 CHR_OUT_FILE = "chr.bin"
 
-# only decrease these if can't let this program have all the sprites;
-# minimum: 0, maximum: MAX_SPRITES_PER_SCANLINE and MAX_SPRITES, respectively
+# only decrease these if you can't let this program have all the sprites and
+# background tiles
+MAX_BG_TILES_TO_USE             = MAX_BG_TILES
 MAX_SPRITES_PER_SCANLINE_TO_USE = MAX_SPRITES_PER_SCANLINE
 MAX_SPRITES_TO_USE              = MAX_SPRITES
 
@@ -279,31 +280,35 @@ def main():
     except OSError:
         sys.exit("Error reading input file.")
 
+    # note: some distinct tiles will be eliminated (replaced with similar
+    # tiles) if necessary
+
     # what each distinct tile looks like;
     # does not change during elimination of tiles
     origDistinctImgTiles = sorted(set(imgTiles) | set((BLANK_TILE,)))
-    origDistinctImgTileCnt = len(origDistinctImgTiles)
 
-    # create a look-up table of distances between any two tiles;
+    # indexes to origDistinctImgTiles;
+    # tells us which tiles haven't been eliminated yet
+    distinctImgTilesLeft = set(range(len(origDistinctImgTiles)))
+
+    # a table of distances between any two tiles;
     # does not change during elimination of tiles
     origTileDistances = []
     for tile1 in origDistinctImgTiles:
         for tile2 in origDistinctImgTiles:
             origTileDistances.append(get_tile_distance(tile1, tile2))
 
-    # which tile was originally in each tile position;
+    # which tile index was originally in each tile position;
     # does not change during elimination of tiles;
     # used for calculating total error
     origImgTileIndexes = [origDistinctImgTiles.index(t) for t in imgTiles]
 
-    # indexes to origDistinctImgTiles (what hasn't been eliminated yet)
-    distinctImgTilesLeft = set(range(origDistinctImgTileCnt))
-
-    # updated when a tile is eliminated
+    # which tile index is in each tile position;
+    # updated whenever a tile is eliminated
     imgTileIndexes = origImgTileIndexes.copy()
 
     print("Image has {} distinct tiles. Eliminating tiles if needed.".format(
-        origDistinctImgTileCnt
+        len(origDistinctImgTiles)
     ))
     eliminatedTileCnt = 0
 
@@ -317,22 +322,22 @@ def main():
         # get number of distinct background tiles
         distinctBgTileCnt = len(set(bgTileIndexes) | set((BLANK_TILE_INDEX,)))
 
-        if distinctBgTileCnt <= MAX_BG_TILES:
+        if distinctBgTileCnt <= MAX_BG_TILES_TO_USE:
             break
         else:
             # replace a tile with one that will cause the smallest total error
             (from_, to_) = get_tile_to_replace(
-                origDistinctImgTileCnt, origTileDistances,
+                len(origDistinctImgTiles), origTileDistances,
                 collections.Counter(imgTileIndexes), distinctImgTilesLeft
             )
-            eliminatedTileCnt += 1
-            distinctImgTilesLeft.remove(from_)
             imgTileIndexes = [
                 (to_ if i == from_ else i) for i in imgTileIndexes
             ]
+            distinctImgTilesLeft.remove(from_)
+            eliminatedTileCnt += 1
 
     totalError = sum(
-        origTileDistances[t1*origDistinctImgTileCnt+t2]
+        origTileDistances[t1*len(origDistinctImgTiles)+t2]
         for (t1, t2) in zip(origImgTileIndexes, imgTileIndexes)
     )
     # ratio=1 if the entire image changed between darkest and brightest
@@ -341,9 +346,8 @@ def main():
     )
 
     print(
-        "{} tiles eliminated with a total error of {} units "
-        "({:.0f} parts per million).".format(
-            eliminatedTileCnt, totalError, totalErrorRatio * 10**6
+        "{} tiles eliminated for a total error of {} units ({:.1f}%).".format(
+            eliminatedTileCnt, totalError, totalErrorRatio * 100
         )
     )
     print(
@@ -355,7 +359,7 @@ def main():
 
     del distinctImgTilesLeft
 
-    # get data of distinct background tiles
+    # get pixels of distinct background tiles
     distinctBgTiles = sorted(
         origDistinctImgTiles[i]
         for i in (set(bgTileIndexes) | set((BLANK_TILE_INDEX,)))
