@@ -84,7 +84,7 @@ BLANK_TILE  = TILE_WIDTH * TILE_HEIGHT * (0,)  # filled with colour 0
 UNUSED_TILE = TILE_WIDTH * TILE_HEIGHT * (3,)  # filled with colour 3
 UNUSED_COLOUR = 0x00  # NES colour index
 
-# --- input file reading ------------------------------------------------------
+# --- read_image() and its functions ------------------------------------------
 
 def get_colour_diff(rgb1, rgb2):
     # get difference (0-768) of two colours (red, green, blue)
@@ -177,7 +177,7 @@ def read_image(image):
 
     return (imgTiles, nesPalette, image.width // TILE_WIDTH)
 
-# --- graphics data processing ------------------------------------------------
+# --- eliminate_and_assign_tiles() and its functions --------------------------
 
 def get_tile_distance(tile1, tile2):
     # tile1, tile2: tuple of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
@@ -333,6 +333,198 @@ def eliminate_tiles(origDistinctImgTiles, origImgTileIndexes, imgWidth):
 
     return imgTileIndexes
 
+def eliminate_and_assign_tiles(origDistinctImgTiles, imgTiles, imgWidth):
+    # origDistinctImgTiles: pixels of each originally distinct tile
+    # imgTiles:             pixels of each tile with duplicates
+    # imgWidth:             image width in tiles
+    # return:               a tuple with:
+    #                           background_tile_indexes
+    #                           sprite_data (tuple per sprite)
+    #                           total_error (int)
+
+    imgHeight = len(imgTiles) // imgWidth
+
+    # which tile index was originally in each tile position
+    origImgTileIndexes = [origDistinctImgTiles.index(t) for t in imgTiles]
+
+    # eliminate distinct tiles if necessary
+    imgTileIndexes = eliminate_tiles(
+        origDistinctImgTiles, origImgTileIndexes, imgWidth
+    )
+
+    # reassign remaining image tiles to sprites and background
+    (bgTileIndexes, spriteData) = assign_tiles_to_sprites(
+        imgTileIndexes, imgWidth, imgHeight
+    )
+
+    distinctBgTileIndexes = set(bgTileIndexes) | set((BLANK_TILE_INDEX,))
+    if (
+           len(distinctBgTileIndexes) > MAX_BG_TILES
+        or len(spriteData)            > MAX_SPRITES
+    ):
+        sys.exit("Error: a crosscheck failed (this should never happen).")
+
+    # get the error caused by eliminating tiles
+    totalError = sum(
+        get_tile_distance(origDistinctImgTiles[t1], origDistinctImgTiles[t2])
+        for (t1, t2) in zip(origImgTileIndexes, imgTileIndexes)
+    )
+
+    return (bgTileIndexes, spriteData, totalError)
+
+# -----------------------------------------------------------------------------
+
+def process_background_data(origDistinctImgTiles, bgTileIndexes):
+    # return: (distinct_background_tiles, background_tiles);
+    #         background_tiles are indexes to distinct_background_tiles
+
+    # get pixels of distinct background tiles;
+    # primary sort by number of colours, secondary sort by pixels
+    distinctBgTiles = sorted(
+        origDistinctImgTiles[i] for i in (
+            set(bgTileIndexes) | set((BLANK_TILE_INDEX,))
+        )
+    )
+    distinctBgTiles.sort(key=lambda t: len(set(t)))
+
+    # convert background tile indexes from image-wide to background-wide
+    bgTileIndexes = [
+        distinctBgTiles.index(origDistinctImgTiles[i]) for i in bgTileIndexes
+    ]
+
+    return (distinctBgTiles, bgTileIndexes)
+
+# --- process_sprite_data() and its functions ---------------------------------
+
+def tile_hflip(tile):
+    # mirror a tile horizontally (left becomes right)
+    # tile:   a list of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
+    # return: new tile
+    newTile = []
+    for srcY in range(TILE_HEIGHT):
+        for srcX in range(TILE_WIDTH):
+            srcPos = srcY * TILE_WIDTH + (TILE_WIDTH - 1 - srcX)
+            newTile.append(tile[srcPos])
+    return tuple(newTile)
+
+def tile_vflip(tile):
+    # mirror a tile vertically (top becomes bottom)
+    # tile:   a list of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
+    # return: new tile
+    newTile = []
+    for srcY in range(TILE_HEIGHT):
+        for srcX in range(TILE_WIDTH):
+            srcPos = (TILE_HEIGHT - 1 - srcY) * TILE_WIDTH + srcX
+            newTile.append(tile[srcPos])
+    return tuple(newTile)
+
+def deduplicate_sprite_tile_pairs(tilePairs):
+    # deduplicate sprite tile pairs by checking if they're horizontal and/or
+    # vertical flips of each other;
+    # tilePairs:  list of distinct (tile1, tile2);
+    #             a tile is a list of (TILE_WIDTH * TILE_HEIGHT) 2-bit ints
+    # generate:   tile pairs without duplicates
+
+    for (ind1, (upperTile1, lowerTile1)) in enumerate(tilePairs):
+        # find the smallest index where the tile pair is duplicate of this pair
+        smallestInd = ind1
+
+        # any hflips at any index smaller than this one?
+        for (ind2, (upperTile2, lowerTile2)) in enumerate(tilePairs[:smallestInd]):
+            if (
+                    upperTile1 == tile_hflip(upperTile2)
+                and lowerTile1 == tile_hflip(lowerTile2)
+            ):
+                smallestInd = ind2
+                break
+        # any vflips at even smaller indexes?
+        for (ind2, (upperTile2, lowerTile2)) in enumerate(tilePairs[:smallestInd]):
+            if (
+                    upperTile1 == tile_vflip(lowerTile2)
+                and lowerTile1 == tile_vflip(upperTile2)
+            ):
+                smallestInd = ind2
+                break
+        # any hflips & vflips at even smaller indexes?
+        for (ind2, (upperTile2, lowerTile2)) in enumerate(tilePairs[:smallestInd]):
+            if (
+                    upperTile1 == tile_hflip(tile_vflip(lowerTile2))
+                and lowerTile1 == tile_hflip(tile_vflip(upperTile2))
+            ):
+                smallestInd = ind2
+                break
+
+        # if no flipwise duplicates found, keep this tile pair
+        if smallestInd == ind1:
+            yield (upperTile1, lowerTile1)
+
+def get_spr_tile_pair_index(upperTile1, lowerTile1, tilePairs):
+    # tilePairs:  list of pixels of distinct sprite tile pairs without flipwise
+    #             duplicates
+    # upperTile1: pixels of upper sprite tile
+    # lowerTile1: pixels of lower sprite tile
+    # return:     (index_to_tilePairs, h_flip, v_flip);
+    #             h_flip, v_flip: 0=no, 1=yes
+
+    for (ind, (upperTile2, lowerTile2)) in enumerate(tilePairs):
+        if (upperTile1, lowerTile1) == (
+            upperTile2, lowerTile2
+        ):
+            return (ind, 0, 0)
+        elif (upperTile1, lowerTile1) == (
+            tile_hflip(upperTile2), tile_hflip(lowerTile2)
+        ):
+            return (ind, 1, 0)
+        elif (upperTile1, lowerTile1) == (
+            tile_vflip(lowerTile2), tile_vflip(upperTile2)
+        ):
+            return (ind, 0, 1)
+        elif (upperTile1, lowerTile1) == (
+            tile_hflip(tile_vflip(lowerTile2)),
+            tile_hflip(tile_vflip(upperTile2))
+        ):
+            return (ind, 1, 1)
+
+    sys.exit("Error: a crosscheck failed (this should never happen).")
+
+def process_sprite_data(distinctImgTiles, spriteData):
+    # distinctImgTiles: pixels of each distinct tile in the original image
+    # spriteData:       for each sprite: (x, y, tile1, tile2);
+    #                   x, y are in tiles;
+    #                   tile1, tile2 are indexes to distinctImgTiles
+    # return:           (distinct_sprite_tile_pairs, new_sprite_data);
+    #                   distinct_sprite_tile_pairs is a list of pairs
+    #                   of tuples of pixels;
+    #                   new_sprite_data is (x, y, tileInd, hFlip, vFlip)
+    #                   for each sprite
+
+    # get pixels of distinct pairs of sprite tiles;
+    # primary sort by number of colours, secondary sort by pixels
+    distinctIndPairs = set((t1, t2) for (x, y, t1, t2) in spriteData)
+    distinctTilePairs = sorted(
+        (distinctImgTiles[t1], distinctImgTiles[t2])
+        for (t1, t2) in distinctIndPairs
+    )
+    distinctTilePairs.sort(key=lambda p: len(set(p[0]) | set(p[1])))
+    del distinctIndPairs
+
+    # deduplicate tile pairs flipwise
+    distinctTilePairs = list(deduplicate_sprite_tile_pairs(distinctTilePairs))
+
+    # reformat sprite data: refer to flipwise-deduplicated tile pairs and store
+    # flips
+    newSpriteData = []
+    for (x, y, t1, t2) in spriteData:
+        (tileInd, hFlip, vFlip) = get_spr_tile_pair_index(
+            distinctImgTiles[t1], distinctImgTiles[t2], distinctTilePairs
+        )
+        newSpriteData.append((x, y, tileInd, hFlip, vFlip))
+
+    # sort sprites by Y and X
+    newSpriteData.sort(key=lambda s: (s[1], s[0]))
+
+    return (distinctTilePairs, newSpriteData)
+
 # --- output data encoding ----------------------------------------------------
 
 def encode_at_data(atData):
@@ -356,7 +548,7 @@ def encode_at_data(atData):
 def get_prg_data(ntData, spriteData, nesPalette, imgWidth):
     # generate each byte of PRG data;
     # ntData:     indexes to distinct background tiles
-    # spriteData: (X, Y, index_to_distinct_sprite_pairs) for each
+    # spriteData: (X, Y, index_to_distinct_sprite_pairs, hFlip, vFlip) for each
     # nesPalette: a tuple of 4 ints
     # imgWidth:   image width in tiles
 
@@ -378,11 +570,11 @@ def get_prg_data(ntData, spriteData, nesPalette, imgWidth):
     yOffset = (NT_HEIGHT - imgHeight) * 4
 
     # sprites (MAX_SPRITES * 4 bytes)
-    for (i, (x, y, t)) in enumerate(spriteData):
+    for (x, y, tileInd, hFlip, vFlip) in spriteData:
         yield from (
             yOffset + y * TILE_HEIGHT - 1,  # Y position minus 1
-            t * 2 + 1,                      # tile index
-            0b00000000,                     # attributes
+            tileInd * 2 + 1,                # tile index
+            (vFlip << 7) | (hFlip << 6),    # attributes
             xOffset + x * TILE_WIDTH,       # X position
         )
     for i in range(MAX_SPRITES - len(spriteData)):
@@ -416,7 +608,7 @@ def encode_tile(tile):
                 for x in range(TILE_WIDTH)
             )
 
-# --- main --------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 def main():
     startTime = time.time()
@@ -449,87 +641,35 @@ def main():
     # pixels of each originally distinct tile;
     # does not change during elimination of tiles
     origDistinctImgTiles = sorted(set(imgTiles) | set((BLANK_TILE,)))
-
-    # which tile index was originally in each tile position;
-    # does not change during elimination of tiles;
-    # used for calculating total error
-    origImgTileIndexes = [origDistinctImgTiles.index(t) for t in imgTiles]
-
     print(f"The image has {len(origDistinctImgTiles)} distinct tiles.")
 
-    # eliminate distinct tiles if necessary
-    imgTileIndexes = eliminate_tiles(
-        origDistinctImgTiles, origImgTileIndexes, imgWidth
+    (bgTileIndexes, spriteData, totalError) = eliminate_and_assign_tiles(
+        origDistinctImgTiles, imgTiles, imgWidth
     )
-
-    # reassign remaining image tiles to sprites and background
-    (bgTileIndexes, spriteData) = assign_tiles_to_sprites(
-        imgTileIndexes, imgWidth, imgHeight
-    )
-
-    distinctBgTileIndexes = set(bgTileIndexes) | set((BLANK_TILE_INDEX,))
-    if (
-           len(distinctBgTileIndexes) > MAX_BG_TILES
-        or len(spriteData)            > MAX_SPRITES
-    ):
-        sys.exit("Error: a crosscheck failed (this should never happen).")
-
-    # get the error caused by eliminating tiles
-    totalError = sum(
-        get_tile_distance(origDistinctImgTiles[t1], origDistinctImgTiles[t2])
-        for (t1, t2) in zip(origImgTileIndexes, imgTileIndexes)
-    )
-    del origImgTileIndexes
     if totalError > 0:
         # an error of 100% means the whole image changed between the darkest
         # and the lightest colour
         print(
-            "The number of distinct tiles was reduced to {}, making the image "
+            "The number of distinct tiles was reduced, making the image "
             "quality {:.2f}% worse.".format(
-                len(set(imgTileIndexes) | set((BLANK_TILE_INDEX,))),
                 totalError /
                 (imgWidth * imgHeight * TILE_WIDTH * TILE_HEIGHT * 3) * 100
             )
         )
-
     print(
         "The NES program will have {} distinct background tiles and {} "
-        "sprites.".format(len(distinctBgTileIndexes), len(spriteData))
+        "sprites.".format(
+            len(set(bgTileIndexes) | set((BLANK_TILE_INDEX,))),
+            len(spriteData)
+        )
     )
 
-    # get pixels of distinct background tiles;
-    # primary sort by number of colours, secondary sort by pixels
-    distinctBgTiles = sorted(
-        origDistinctImgTiles[i] for i in distinctBgTileIndexes
+    (distinctBgTiles, bgTileIndexes) = process_background_data(
+        origDistinctImgTiles, bgTileIndexes
     )
-    distinctBgTiles.sort(key=lambda t: len(set(t)))
-    # convert background tile indexes from image-wide to background-wide
-    bgTileIndexes = [
-        distinctBgTiles.index(origDistinctImgTiles[i]) for i in bgTileIndexes
-    ]
-    del distinctBgTileIndexes
-
-    # get pixels of distinct pairs of sprite tiles;
-    # primary sort by number of colours, secondary sort by pixels
-    distinctSprTileIndPairs = set((t1, t2) for (x, y, t1, t2) in spriteData)
-    distinctSprTilePairs = sorted(
-        (origDistinctImgTiles[t1], origDistinctImgTiles[t2])
-        for (t1, t2) in distinctSprTileIndPairs
+    (distinctSprTilePairs, spriteData) = process_sprite_data(
+        origDistinctImgTiles, spriteData
     )
-    distinctSprTilePairs.sort(key=lambda p: len(set(p[0]) | set(p[1])))
-    del distinctSprTileIndPairs
-    # make sprites refer to tile pairs instead of individual tiles
-    spriteData = [
-        (
-            x, y, distinctSprTilePairs.index(
-                (origDistinctImgTiles[t1], origDistinctImgTiles[t2])
-            )
-        ) for (x, y, t1, t2) in spriteData
-    ]
-    # sort sprites by Y and X
-    spriteData.sort(key=lambda s: (s[1], s[0]))
-
-    # TODO: deduplicate sprite tile pair data by flipping?
 
     # write PRG data
     try:
