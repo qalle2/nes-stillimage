@@ -235,11 +235,11 @@ def assign_tiles_to_sprites(imgTiles, imgWidth, imgHeight):
             break
 
 def get_tile_to_replace(
-    origTileCnt, tileDistances, tileCnts, distinctTilesLeft, minPossibleError=1
+    origTileCnt, tileDiffs, tileCnts, distinctTilesLeft, minPossibleError=1
 ):
     # which distinct tile to eliminate with the smallest error possible?
     #   origTileCnt:       original number of distinct tiles
-    #   tileDistances:     a table of distances between tiles;
+    #   tileDiffs:         a table of differences between tiles;
     #                      index: (tile_index1 * origTileCnt + tile_index2)
     #   tileCnts:          {tile_index: count_in_image, ...}
     #   distinctTilesLeft: set of indexes to original distinct tiles
@@ -259,7 +259,7 @@ def get_tile_to_replace(
             minDiff = -1
             for dstInd in distinctTilesLeft:
                 if dstInd != srcInd:
-                    diff = tileDistances[srcInd*origTileCnt+dstInd]
+                    diff = tileDiffs[srcInd*origTileCnt+dstInd]
                     if minDiff == -1 or diff < minDiff:
                         minDiff = diff
             # remember this tile if it results in the smallest total error so
@@ -275,12 +275,22 @@ def get_tile_to_replace(
     minDiff = -1
     for dstInd in distinctTilesLeft:
         if dstInd != bestSrcInd:
-            diff = tileDistances[bestSrcInd*origTileCnt+dstInd]
+            diff = tileDiffs[bestSrcInd*origTileCnt+dstInd]
             if minDiff == -1 or diff < minDiff:
                 minDiff = diff
                 bestDstInd = dstInd
 
     return (bestSrcInd, bestDstInd)
+
+def get_tile_diff(tile1, tile2, nesPalette):
+    # get difference of two tiles
+    #   tile1, tile2: tuple of TILE_WIDTH * TILE_HEIGHT ints
+    #   nesPalette:   list of NES colour indexes
+    return sum(
+        get_colour_diff(
+            NES_PALETTE[nesPalette[c1]], NES_PALETTE[nesPalette[c2]]
+        ) for (c1, c2) in zip(tile1, tile2)
+    )
 
 def eliminate_tiles(
     origDistinctImgTiles, origImgTileIndexes, imgWidth, nesPalette
@@ -297,21 +307,17 @@ def eliminate_tiles(
     imgHeight = len(origImgTileIndexes) // imgWidth  # image height in tiles
 
     # a table of differences between any two tiles; does not change
-    origTileDistances = []
+    origTileDiffs = []
     for tile1 in origDistinctImgTiles:
-        tile1Rgb = tuple(NES_PALETTE[nesPalette[c]] for c in tile1)
         for tile2 in origDistinctImgTiles:
-            origTileDistances.append(sum(
-                get_colour_diff(c1, NES_PALETTE[nesPalette[c2]])
-                for (c1, c2) in zip(tile1Rgb, tile2)
-            ))
+            origTileDiffs.append(get_tile_diff(tile1, tile2, nesPalette))
 
-    # which tile index is in each tile position;
-    # updated whenever a tile is eliminated
+    # which tile index is in each tile position; updated whenever a tile is
+    # eliminated
     imgTileIndexes = origImgTileIndexes.copy()
 
-    # indexes to origDistinctImgTiles;
-    # tells us which tiles haven't been eliminated yet
+    # indexes to origDistinctImgTiles; tells us which tiles haven't been
+    # eliminated yet
     distinctImgTilesLeft = set(range(len(origDistinctImgTiles)))
 
     # the smallest possible error on each round of tile elimination;
@@ -320,19 +326,13 @@ def eliminate_tiles(
     minPossibleError = 1
 
     while True:
-        # assign as many tiles as possible to sprites
-        spriteData = list(assign_tiles_to_sprites(
-            imgTileIndexes, imgWidth, imgHeight
-        ))
-
-        # mark background tiles behind sprites as blank
-        bgTileIndexes = imgTileIndexes.copy()
-        for (x, y, upperTilePos, lowerTilePos) in spriteData:
-            bgTileIndexes[ y   *imgWidth+x] = BLANK_TILE_INDEX
-            bgTileIndexes[(y+1)*imgWidth+x] = BLANK_TILE_INDEX
-
         # get number of distinct background tiles
-        distinctBgTileCnt = len(set(bgTileIndexes) | set((BLANK_TILE_INDEX,)))
+        spriteCnt = len(list(
+            assign_tiles_to_sprites(imgTileIndexes, imgWidth, imgHeight)
+        ))
+        distinctBgTileCnt = (
+            len(set(imgTileIndexes) | set((BLANK_TILE_INDEX,))) - spriteCnt * 2
+        )
 
         if distinctBgTileCnt <= MAX_BG_TILES:
             break
@@ -340,14 +340,14 @@ def eliminate_tiles(
             # replace a tile with one that will cause the smallest total error
             (tileFrom, tileTo) = get_tile_to_replace(
                 len(origDistinctImgTiles),
-                origTileDistances,
+                origTileDiffs,
                 collections.Counter(imgTileIndexes),
                 distinctImgTilesLeft,
                 minPossibleError
             )
             minPossibleError = max(
                 minPossibleError,
-                origTileDistances[tileFrom*len(origDistinctImgTiles)+tileTo]
+                origTileDiffs[tileFrom*len(origDistinctImgTiles)+tileTo]
                 * imgTileIndexes.count(tileFrom)
             )
 
@@ -682,29 +682,31 @@ def main():
 
     imgHeight = len(imgTiles) // imgWidth
 
-    print("NES palette to use for {}: {}".format(
-        os.path.basename(inputFile), " ".join(f"0x{c:02x}" for c in nesPalette)
+    print("Input file: {}, {}*{} tiles, {} distinct tiles".format(
+        os.path.basename(inputFile), imgWidth, imgHeight, len(set(imgTiles))
     ))
 
-    # pixels of each originally distinct tile;
-    # does not change during elimination of tiles
+    # pixels of each originally distinct tile; does not change during
+    # elimination of tiles; blank tile needed for margins and behind sprites
     origDistinctImgTiles = sorted(set(imgTiles) | set((BLANK_TILE,)))
-    print(f"The image has {len(origDistinctImgTiles)} distinct tiles.")
 
+    elimStartTime = time.time()
     (bgTileIndexes, spriteData, totalError) = eliminate_and_assign_tiles(
         origDistinctImgTiles, imgTiles, imgWidth, nesPalette
     )
     if totalError > 0:
         maxError = imgWidth * imgHeight * TILE_WIDTH * TILE_HEIGHT * 1536
         print(
-            "The number of distinct tiles was reduced, making the image "
-            "quality {:.2f}% worse.".format(totalError / maxError * 100)
+            "The number of distinct tiles was reduced (quality loss {:.2f}%, "
+            "time {:.1f} s)".format(
+                totalError / maxError * 100, time.time() - elimStartTime
+            )
         )
     print(
-        "The NES program will have {} distinct background tiles and {} "
-        "sprites.".format(
+        "Using {} distinct background tiles, {} sprites, NES palette {}"
+        .format(
             len(set(bgTileIndexes) | set((BLANK_TILE_INDEX,))),
-            len(spriteData)
+            len(spriteData), " ".join(f"0x{c:02x}" for c in nesPalette)
         )
     )
 
@@ -737,7 +739,7 @@ def main():
     except OSError:
         sys.exit(f"Error writing {CHR_OUT_FILE}")
 
-    print("Wrote {} and {}. Total time: {:.1f} seconds.".format(
+    print("Wrote {} and {} (total time {:.1f} s)".format(
         PRG_OUT_FILE, CHR_OUT_FILE, time.time() - startTime
     ))
 
