@@ -56,6 +56,10 @@ python3 png2nesdata.py test-in/pattern-32x28.png
 asm6 stillimage.asm   test-out/pattern-32x28.nes
 echo
 
+python3 png2nesdata.py test-in/qalle-fursona.png
+asm6 stillimage.asm   test-out/qalle-fursona.nes
+echo
+
 python3 png2nesdata.py test-in/spriteflip.png
 asm6 stillimage.asm   test-out/spriteflip.nes
 echo
