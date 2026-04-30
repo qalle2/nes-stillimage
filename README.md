@@ -1,4 +1,5 @@
 # nes-stillimage
+*This project has been moved to [Codeberg](https://codeberg.org/qalle/nes-imageconv). This version here on GitHub will no longer be updated.*
 
 Table of contents:
 * [Introduction](#introduction)
